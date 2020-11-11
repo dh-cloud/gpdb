@@ -103,6 +103,7 @@ int			sync_method = DEFAULT_SYNC_METHOD;
 int			wal_level = WAL_LEVEL_MINIMAL;
 int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
+int			max_slot_wal_keep_size_mb = -1;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -703,6 +704,10 @@ static ControlFileData *ControlFile = NULL;
  */
 #define UsableBytesInPage (XLOG_BLCKSZ - SizeOfXLogShortPHD)
 #define UsableBytesInSegment ((XLOG_SEG_SIZE / XLOG_BLCKSZ) * UsableBytesInPage - (SizeOfXLogLongPHD - SizeOfXLogShortPHD))
+
+/* Convert values of GUCs measured in megabytes to equiv. segment count */
+#define ConvertToXSegs(x)	\
+	(x / (XLOG_SEG_SIZE / (1024 * 1024)))
 
 /*
  * Private, possibly out-of-date copy of shared LogwrtResult.
@@ -3851,9 +3856,10 @@ XLogGetLastRemovedSegno(void)
 	return lastRemovedSegNo;
 }
 
+
 /*
- * Update the last removed segno pointer in shared memory, to reflect
- * that the given XLOG file has been removed.
+ * Update the last removed segno pointer in shared memory, to reflect that the
+ * given XLOG file has been removed.
  */
 static void
 UpdateLastRemovedPtr(char *filename)
@@ -7383,6 +7389,24 @@ StartupXLOG(void)
 					(errmsg("redo is not required")));
 		}
 	}
+	else
+	{
+		volatile XLogCtlData *xlogctl = XLogCtl;
+
+		/*
+		 * For the !InRecovery case (e.g. there was a clean shutdown on
+		 * primary), we do not do any recovery so the below variables are not
+		 * initialized.  However they are used soon by
+		 * PrescanPreparedTransactions() in this function.  We need to set
+		 * proper values for them else PrescanPreparedTransactions() could hang
+		 * in read_local_xlog_page().
+		 */
+		SpinLockAcquire(&xlogctl->info_lck);
+		xlogctl->lastReplayedEndRecPtr = LastRec;
+		xlogctl->lastReplayedTLI = checkPoint.ThisTimeLineID;
+		SpinLockRelease(&xlogctl->info_lck);
+	}
+
 
 	/*
 	 * Kill WAL receiver, if it's still running, before we continue to write
@@ -8579,7 +8603,7 @@ CreateCheckPoint(int flags)
 	CheckPoint	checkPoint;
 	XLogRecPtr	recptr;
 	XLogCtlInsert *Insert = &XLogCtl->Insert;
-	XLogRecData rdata[6];
+	XLogRecData rdata[3];
 	char* 		dtxCheckPointInfo;
 	int			dtxCheckPointInfoSize;
 	uint32		freespace;
@@ -8919,17 +8943,14 @@ CreateCheckPoint(int flags)
 	rdata[1].data = (char *) dtxCheckPointInfo;
 	rdata[1].len = dtxCheckPointInfoSize;
 	rdata[1].buffer = InvalidBuffer;
-	rdata[1].next = NULL;
+	rdata[1].next = &(rdata[2]);
 
 	prepared_transaction_agg_state *p = NULL;
-
 	getTwoPhasePreparedTransactionData(&p);
-	rdata[5].data = (char*)p;
-	rdata[5].buffer = InvalidBuffer;
-	rdata[5].len = PREPARED_TRANSACTION_CHECKPOINT_BYTES(p->count);
-	rdata[4].next = &(rdata[5]);
-	rdata[5].next = NULL;
-
+	rdata[2].data = (char*)p;
+	rdata[2].len = PREPARED_TRANSACTION_CHECKPOINT_BYTES(p->count);
+	rdata[2].buffer = InvalidBuffer;
+	rdata[2].next = NULL;
 	/*
 	 * Need to save the oldest prepared transaction XLogRecPtr for use later.
 	 * It is not sufficient to just save the pointer because we may remove the
@@ -8940,7 +8961,7 @@ CreateCheckPoint(int flags)
 
 	memset(&ptrd_oldest, 0, sizeof(ptrd_oldest));
 
-	ptrd_oldest_ptr = getTwoPhaseOldestPreparedTransactionXLogRecPtr(&rdata[5]);
+	ptrd_oldest_ptr = getTwoPhaseOldestPreparedTransactionXLogRecPtr(p);
 
 	if (ptrd_oldest_ptr != NULL)
 		memcpy(&ptrd_oldest, ptrd_oldest_ptr, sizeof(ptrd_oldest));
@@ -8951,6 +8972,13 @@ CreateCheckPoint(int flags)
 						rdata);
 
 	XLogFlush(recptr);
+
+	/*
+	 * pfree memory blocks used by XLog to avoid memory leak in checkpointer.
+	 * Don't relay on the memory context's reset()
+	 */
+	pfree(dtxCheckPointInfo);
+	pfree(p);
 
 	/*
 	 * We mustn't write any new WAL after a shutdown checkpoint, or it will be
@@ -9053,6 +9081,7 @@ CreateCheckPoint(int flags)
 	{
 		GetXLogCleanUpTo(recptr, &_logSegNo);
 		KeepLogSeg(recptr, &_logSegNo);
+		InvalidateObsoleteReplicationSlots(_logSegNo);
 		_logSegNo--;
 		RemoveOldXlogFiles(_logSegNo, recptr);
 	}
@@ -9209,6 +9238,12 @@ RecoveryRestartPoint(const CheckPoint *checkPoint)
 	}
 
 	/*
+	 * Find oldest prepared transaction start LSN and store in shared memory so
+	 * that restartpoint could use that for wal segment file removing/recyling.
+	 */
+	SetOldestPreparedTransaction();
+
+	/*
 	 * Copy the checkpoint record to shared memory, so that checkpointer can
 	 * work out the next time it wants to perform a restartpoint.
 	 */
@@ -9346,11 +9381,16 @@ CreateRestartPoint(int flags)
 
 	SIMPLE_FAULT_INJECTOR("restartpoint_guts");
 
+	XLogRecPtr oldest_recptr = GetOldestPreparedTransaction();
+
 	/*
 	 * Select point at which we can truncate the xlog, which we base on the
 	 * prior checkpoint's earliest info.
 	 */
-	XLByteToSeg(ControlFile->checkPointCopy.redo, _logSegNo);
+	if (oldest_recptr != InvalidXLogRecPtr && oldest_recptr <= ControlFile->checkPointCopy.redo)
+		XLByteToSeg(oldest_recptr, _logSegNo);
+	else
+		XLByteToSeg(ControlFile->checkPointCopy.redo, _logSegNo);
 
 	/*
 	 * Update pg_control, using current time.  Check that it still shows
@@ -9414,6 +9454,7 @@ CreateRestartPoint(int flags)
 		endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 
 		KeepLogSeg(endptr, &_logSegNo);
+		InvalidateObsoleteReplicationSlots(_logSegNo);
 		_logSegNo--;
 
 		/*
@@ -9507,18 +9548,26 @@ CreateRestartPoint(int flags)
  *
  * This is calculated by subtracting wal_keep_segments from the given xlog
  * location, recptr and by making sure that that result is below the
- * requirement of replication slots.
+ * requirement of replication slots.  For the latter criterion we do consider
+ * the effects of max_slot_wal_keep_size: reserve at most that much space back
+ * from recptr.
  */
 static void
 KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo)
 {
+	XLogSegNo	currSegNo;
 	XLogSegNo	segno;
 	XLogRecPtr	keep;
 	bool setvalue = false;
 
-	XLByteToSeg(recptr, segno);
-	keep = XLogGetReplicationSlotMinimumLSN();
+	XLByteToSeg(recptr, currSegNo);
+	segno = currSegNo;
 
+	/*
+	 * Calculate how many segments are kept by slots first, adjusting for
+	 * max_slot_wal_keep_size.
+	 */
+	keep = XLogGetReplicationSlotMinimumLSN();
 #ifdef FAULT_INJECTOR
 	/*
 	 * Ignore the replication slot's LSN and let the WAL still needed by the
@@ -9529,34 +9578,40 @@ KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo)
 	if (SIMPLE_FAULT_INJECTOR("keep_log_seg") == FaultInjectorTypeSkip)
 		keep = GetXLogWriteRecPtr();
 #endif
-
-	/* compute limit for wal_keep_segments first */
-	if (wal_keep_segments > 0)
+	if (keep != InvalidXLogRecPtr)
 	{
-		/* avoid underflow, don't go below 1 */
-		if (segno <= wal_keep_segments)
-			segno = 1;
-		else
-			segno = segno - wal_keep_segments;
+		XLByteToSeg(keep, segno);
 		setvalue = true;
+
+		/* Cap by max_slot_wal_keep_size ... */
+		if (max_slot_wal_keep_size_mb >= 0)
+		{
+			XLogRecPtr	slot_keep_segs;
+
+			slot_keep_segs = ConvertToXSegs(max_slot_wal_keep_size_mb);
+
+			if (slot_keep_segs > wal_keep_segments &&
+				currSegNo - segno > slot_keep_segs)
+			{
+				*logSegNo = currSegNo - slot_keep_segs;
+				return;
+			}
+		}
 	}
 
-	/* then check whether slots limit removal further */
-	if (max_replication_slots > 0 && keep != InvalidXLogRecPtr)
+	/* but, keep at least wal_keep_segments if that's set */
+	if (wal_keep_segments > 0 && currSegNo - segno < wal_keep_segments)
 	{
-		XLogSegNo	slotSegNo;
-
-		XLByteToSeg(keep, slotSegNo);
-
-		if (slotSegNo <= 0)
+		/* avoid underflow, don't go below 1 */
+		if (currSegNo <= wal_keep_segments)
 			segno = 1;
-		else if (slotSegNo < segno)
-			segno = slotSegNo;
+		else
+			segno = currSegNo - wal_keep_segments;
 		setvalue = true;
 	}
 
 	/* don't delete WAL segments newer than the calculated segment */
-	if (setvalue && segno < *logSegNo)
+	if (setvalue && (XLogRecPtrIsInvalid(*logSegNo) || segno < *logSegNo))
 		*logSegNo = segno;
 }
 

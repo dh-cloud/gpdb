@@ -44,6 +44,7 @@
 #include "naucrates/dxl/operators/CDXLDatumInt8.h"
 #include "naucrates/dxl/xml/dxltokens.h"
 
+#include "naucrates/md/CMDTypeBoolGPDB.h"
 #include "naucrates/md/IMDScalarOp.h"
 #include "naucrates/md/IMDAggregate.h"
 #include "naucrates/md/IMDTypeBool.h"
@@ -899,6 +900,7 @@ CTranslatorQueryToDXL::TranslateCTASToDXL()
 
 	IMDRelation::Ereldistrpolicy rel_distr_policy = IMDRelation::EreldistrRandom;
 	ULongPtrArray *distribution_colids = NULL;
+	IMdIdArray *distr_opfamilies = NULL;
 	
 	if (NULL != m_query->intoPolicy)
 	{
@@ -907,12 +909,17 @@ CTranslatorQueryToDXL::TranslateCTASToDXL()
 		if (IMDRelation::EreldistrHash == rel_distr_policy)
 		{
 			distribution_colids = GPOS_NEW(m_mp) ULongPtrArray(m_mp);
+			distr_opfamilies = GPOS_NEW(m_mp) IMdIdArray(m_mp);
 
 			for (ULONG ul = 0; ul < (ULONG) m_query->intoPolicy->nattrs; ul++)
 			{
 				AttrNumber attno = m_query->intoPolicy->attrs[ul];
 				GPOS_ASSERT(0 < attno);
 				distribution_colids->Append(GPOS_NEW(m_mp) ULONG(attno - 1));
+
+				Oid opfamily = gpdb::GetOpclassFamily(m_query->intoPolicy->opclasses[ul]);
+				GPOS_ASSERT(InvalidOid != opfamily);
+				distr_opfamilies->Append(GPOS_NEW(m_mp) CMDIdGPDB(opfamily));
 			}
 		}
 	}
@@ -964,6 +971,7 @@ CTranslatorQueryToDXL::TranslateCTASToDXL()
 									GPOS_NEW(m_mp) CDXLCtasStorageOptions(md_tablespace_name, ctas_commit_action, ctas_storage_options),
 									rel_distr_policy,
 									distribution_colids,
+									distr_opfamilies,
 									fTempTable,
 									has_oids,
 									rel_storage_type,
@@ -1678,7 +1686,7 @@ CTranslatorQueryToDXL::TranslateWindowToDXL
 
 				StoreAttnoColIdMapping(output_attno_to_colid_mapping, resno, colid);
 			}
-			else if (CTranslatorUtils::IsWindowSpec(target_entry, window_clause))
+			else if (CTranslatorUtils::IsReferencedInWindowSpec(target_entry, window_clause))
 			{
 				// add computed column used in window specification needed in the output columns
 				// to the child's project list
@@ -1733,7 +1741,7 @@ CTranslatorQueryToDXL::TranslateWindowToDXL
 		}
 		else if (!IsA(target_entry->expr, Var))
 		{
-			GPOS_ASSERT(CTranslatorUtils::IsWindowSpec(target_entry, window_clause));
+			GPOS_ASSERT(CTranslatorUtils::IsReferencedInWindowSpec(target_entry, window_clause));
 			// computed columns used in the window specification
 			new_child_project_list_dxlnode->AddChild(project_elem_dxlnode);
 		}

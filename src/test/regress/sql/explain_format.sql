@@ -56,7 +56,7 @@ EXPLAIN (ANALYZE) SELECT * from boxes LEFT JOIN apples ON apples.id = boxes.appl
 -- m/Segments: \d+/
 -- s/Segments: \d+/Segments: #/
 -- m/Pivotal Optimizer \(GPORCA\) version \d+\.\d+\.\d+",?/
--- s/Pivotal Optimizer \(GPORCA\) version \d+\.\d+\.\d+",?/Pivotal Optimizer \(GPORCA\) version ##.##.##"/
+-- s/Pivotal Optimizer \(GPORCA\) version \d+\.\d+\.\d+",?/Pivotal Optimizer \(GPORCA\)"/
 -- m/ Memory: \d+/
 -- s/ Memory: \d+/ Memory: ###/
 -- m/Maximum Memory Used: \d+/
@@ -88,7 +88,7 @@ EXPLAIN (ANALYZE, FORMAT YAML) SELECT * from boxes LEFT JOIN apples ON apples.id
 --
 -- start_matchsubs
 -- m/Pivotal Optimizer \(GPORCA\) version \d+\.\d+\.\d+/
--- s/Pivotal Optimizer \(GPORCA\) version \d+\.\d+\.\d+/Pivotal Optimizer \(GPORCA\) version ##.##.##/
+-- s/Pivotal Optimizer \(GPORCA\) version \d+\.\d+\.\d+/Pivotal Optimizer \(GPORCA\)/
 -- end_matchsubs
 -- explain_processing_off
 EXPLAIN (FORMAT JSON, COSTS OFF) SELECT * FROM generate_series(1, 10);
@@ -108,7 +108,9 @@ EXPLAIN (FORMAT JSON, COSTS OFF) SELECT * FROM jsonexplaintest WHERE i = 2;
 -- The plan contains an Agg and a Hash node on top of each other, neither of
 -- which have a plan->flow set. Explain should be able to dig the flow from
 -- the grandchild node then.
-CREATE TEMPORARY TABLE SUBSELECT_TBL (
+CREATE SCHEMA explaintest;
+SET search_path=explaintest;
+CREATE TABLE SUBSELECT_TBL (
   f1 integer,
   f2 integer,
   f3 float
@@ -127,7 +129,14 @@ set local enable_bitmapscan=on;
 explain (format json, costs off) select * from subselect_tbl where f1 < 10;
 commit;
 
+-- Yet another variant, with missing flow in Append. (github issue #9819)
+create table subselect_tbl_child() INHERITS (subselect_tbl);
+explain (verbose, format json) select * from (select * from subselect_tbl) p where f1 in (select f1 from subselect_tbl where f2 >= 19);
+
 -- Cleanup
+RESET search_path;
+DROP SCHEMA explaintest cascade;
+
 DROP TABLE boxes;
 DROP TABLE apples;
 DROP TABLE box_locations;

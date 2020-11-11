@@ -623,6 +623,41 @@ gpdb::FreeAttrStatsSlot
 }
 
 bool
+gpdb::IsFuncAllowedForPartitionSelection
+    (
+    Oid funcid
+    )
+{
+    GP_WRAP_START;
+    switch (funcid)
+    {
+	// These are the functions we have allowed as lossy casts for Partition selection.
+	// For range partition selection, the logic in ORCA checks on bounds of the partition ranges.
+	// Hence these must be increasing functions.
+        case CONVERT_TS_DATE_OID:
+        case CONVERT_FLOAT8_INT4_OID:
+        case CONVERT_FLOAT4_INT4_OID:
+        case CONVERT_INT8_INT2_OID:
+        case CONVERT_INT8_INT4_OID:
+        case CONVERT_INT4_INT2_OID:
+        case CONVERT_FLOAT4_INT8_OID:
+        case CONVERT_FLOAT4_INT2_OID:
+        case CONVERT_FLOAT4_NUMERIC_OID:
+        case CONVERT_FLOAT8_INT8_OID:
+        case CONVERT_FLOAT8_INT2_OID:
+        case CONVERT_FLOAT8_FLOAT4_OID:
+        case CONVERT_FLOAT8_NUMERIC_OID:
+        case CONVERT_NUMERIC_INT8_OID:
+        case CONVERT_NUMERIC_INT2_OID:
+        case CONVERT_NUMERIC_INT4_OID:
+            return true;
+        default:
+            return false;
+    }
+    GP_WRAP_END;
+}
+
+bool
 gpdb::FuncStrict
 	(
 	Oid funcid
@@ -635,6 +670,28 @@ gpdb::FuncStrict
 	}
 	GP_WRAP_END;
 	return false;
+}
+
+bool
+gpdb::IsFuncNDVPreserving
+	(
+	Oid funcid
+	)
+{
+	// Given a function oid, return whether it's one of a list of NDV-preserving
+	// functions (estimated NDV of output is similar to that of the input)
+	switch (funcid)
+	{
+		// for now, these are the functions we consider for this optimization
+		case LOWER_OID:
+		case LTRIM_SPACE_OID:
+		case BTRIM_SPACE_OID:
+		case RTRIM_SPACE_OID:
+		case UPPER_OID:
+			return true;
+		default:
+			return false;
+	}
 }
 
 char
@@ -1472,6 +1529,21 @@ gpdb::GetColumnDefOpclassForType
 }
 
 Oid
+gpdb::GetDefaultDistributionOpfamilyForType
+	(
+	Oid typid
+	)
+{
+	GP_WRAP_START;
+	{
+		/* catalog tables: pg_type, pg_opclass */
+		return cdb_default_distribution_opfamily_for_type(typid);
+	}
+	GP_WRAP_END;
+	return false;
+}
+
+Oid
 gpdb::GetHashProcInOpfamily
 	(
 	Oid opfamily,
@@ -2183,6 +2255,24 @@ gpdb::IsOpStrict
 	return false;
 }
 
+bool
+gpdb::IsOpNDVPreserving
+	(
+	Oid opno
+	)
+{
+	switch (opno)
+	{
+		// for now, we consider only the concatenation op as NDV-preserving
+		// (note that we do additional checks later, e.g. col || 'const' is
+		// NDV-preserving, while col1 || col2 is not)
+		case OIDTextConcatenateOperator:
+			return true;
+		default:
+			return false;
+	}
+}
+
 void
 gpdb::GetOpInputTypes
 	(
@@ -2292,23 +2382,6 @@ gpdb::MutateQueryTree
 	}
 	GP_WRAP_END;
 	return NULL;
-}
-
-List *
-gpdb::MutateRangeTable
-	(
-	List *rtable,
-	Node *(*mutator) (),
-	void *context,
-	int flags
-	)
-{
-	GP_WRAP_START;
-	{
-		return range_table_mutator(rtable, mutator, context, flags);
-	}
-	GP_WRAP_END;
-	return NIL;
 }
 
 bool
@@ -2953,6 +3026,30 @@ gpdb::GetOpFamiliesForScOp
 	GP_WRAP_END;
 	
 	return NIL;
+}
+
+// get the OID of hash equality operator(s) compatible with the given op
+Oid
+gpdb::GetCompatibleHashOpFamily(Oid opno)
+{
+	GP_WRAP_START;
+	{
+		return get_compatible_hash_opfamily(opno);
+	}
+	GP_WRAP_END;
+	return InvalidOid;
+}
+
+// get the OID of hash equality operator(s) compatible with the given op
+Oid
+gpdb::GetCompatibleLegacyHashOpFamily(Oid opno)
+{
+	GP_WRAP_START;
+	{
+		return get_compatible_legacy_hash_opfamily(opno);
+	}
+	GP_WRAP_END;
+	return InvalidOid;
 }
 
 List *

@@ -45,6 +45,7 @@
 
 #include "cdb/cdbmutate.h"		/* cdbmutate_warn_ctid_without_segid */
 #include "cdb/cdbpath.h"		/* cdbpath_rows() */
+#include "cdb/cdbsetop.h"
 
 // TODO: these planner gucs need to be refactored into PlannerConfig.
 bool		gp_enable_sort_limit = FALSE;
@@ -120,8 +121,9 @@ static void subquery_push_qual(Query *subquery,
 				   RangeTblEntry *rte, Index rti, Node *qual);
 static void recurse_push_qual(Node *setOp, Query *topquery,
 				  RangeTblEntry *rte, Index rti, Node *qual);
-static void bring_to_singleQE(PlannerInfo *root, RelOptInfo *rel, List *outer_quals);
-
+static void bring_to_singleQE(PlannerInfo *root, RelOptInfo *rel,  List *outer_quals);
+static bool is_query_contain_limit_groupby(Query *parse);
+static void handle_gen_seggen_volatile_path(PlannerInfo *root, RelOptInfo *rel);
 
 /*
  * make_one_rel
@@ -413,6 +415,18 @@ bring_to_singleQE(PlannerInfo *root, RelOptInfo *rel, List *outer_quals)
 			if (origpath->param_info)
 				continue;
 
+			/*
+			 * param_info cannot cover the case that an index path's orderbyclauses
+			 * See github issue: https://github.com/greenplum-db/gpdb/issues/9733
+			 */
+			if (IsA(origpath, IndexPath))
+			{
+				IndexPath *ipath = (IndexPath *) origpath;
+				if (contains_outer_params((Node *) ipath->indexorderbys,
+										  (void *) root))
+					continue;
+			}
+
 			CdbPathLocus_MakeSingleQE(&target_locus,
 									  origpath->locus.numsegments);
 
@@ -433,6 +447,40 @@ bring_to_singleQE(PlannerInfo *root, RelOptInfo *rel, List *outer_quals)
 
 		add_path(rel, path);
 	}
+	set_cheapest(rel);
+}
+
+/*
+ * handle_gen_seggen_volatile_path
+ *
+ * Only use for base replicated rel.
+ * Change the path in its pathlist if match the pattern
+ * (segmentgeneral or general path contains volatile restrictions).
+ */
+static void
+handle_gen_seggen_volatile_path(PlannerInfo *root, RelOptInfo *rel)
+{
+	List	   *origpathlist;
+	ListCell   *lc;
+
+	origpathlist = rel->pathlist;
+	rel->cheapest_startup_path = NULL;
+	rel->cheapest_total_path = NULL;
+	rel->cheapest_unique_path = NULL;
+	rel->cheapest_parameterized_paths = NIL;
+	rel->pathlist = NIL;
+
+	foreach(lc, origpathlist)
+	{
+		Path	     *origpath = (Path *) lfirst(lc);
+		Path	     *path;
+
+		path = turn_volatile_seggen_to_singleqe(root,
+												origpath,
+												(Node *) (rel->baserestrictinfo));
+		add_path(rel, path);
+	}
+
 	set_cheapest(rel);
 }
 
@@ -503,6 +551,14 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		 */
 		bring_to_singleQE(root, rel, rel->upperrestrictinfo);
 	}
+
+	/*
+	 * Greenplum specific behavior:
+	 * Change the path in pathlist if it is a general or segmentgeneral
+	 * path that contains volatile restrictions.
+	 */
+	if (rel->reloptkind == RELOPT_BASEREL)
+		handle_gen_seggen_volatile_path(root, rel);
 
 #ifdef OPTIMIZER_DEBUG
 	debug_print_rel(root, rel);
@@ -1457,9 +1513,8 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		 * it to singleQE and materialize the data because we
 		 * cannot pass params across motion.
 		 */
-		config->force_singleQE = false;
 		if ((!bms_is_empty(required_outer)) &&
-			(subquery->limitCount || subquery->limitOffset))
+			is_query_contain_limit_groupby(subquery))
 			config->force_singleQE = true;
 
 		rel->subplan = subquery_planner(root->glob, subquery,
@@ -1474,6 +1529,21 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		rel->subplan = rte->subquery_plan;
 		subroot = root;
 		/* XXX rel->onerow = ??? */
+	}
+
+	if (rel->subplan->flow->locustype == CdbLocusType_General &&
+		(contain_volatile_functions((Node *) rel->subplan->targetlist) ||
+		 contain_volatile_functions(subquery->havingQual)))
+	{
+		rel->subplan->flow->locustype = CdbLocusType_SingleQE;
+		rel->subplan->flow->flotype = FLOW_SINGLETON;
+	}
+
+	if (rel->subplan->flow->locustype == CdbLocusType_SegmentGeneral &&
+		(contain_volatile_functions((Node *) rel->subplan->targetlist) ||
+		 contain_volatile_functions(subquery->havingQual)))
+	{
+		rel->subplan = (Plan *) make_motion_gather(subroot, rel->subplan, NIL);
 	}
 
 	rel->subroot = subroot;
@@ -2717,6 +2787,31 @@ recurse_push_qual(Node *setOp, Query *topquery,
 		elog(ERROR, "unrecognized node type: %d",
 			 (int) nodeTag(setOp));
 	}
+}
+
+static bool
+is_query_contain_limit_groupby(Query *parse)
+{
+	if (parse->limitCount || parse->limitOffset ||
+		parse->groupClause || parse->distinctClause)
+		return true;
+
+	if (parse->setOperations)
+	{
+		SetOperationStmt *sop_stmt = (SetOperationStmt *) (parse->setOperations);
+		RangeTblRef   *larg = (RangeTblRef *) sop_stmt->larg;
+		RangeTblRef   *rarg = (RangeTblRef *) sop_stmt->rarg;
+		RangeTblEntry *lrte = list_nth(parse->rtable, larg->rtindex-1);
+		RangeTblEntry *rrte = list_nth(parse->rtable, rarg->rtindex-1);
+
+		if ((lrte->rtekind == RTE_SUBQUERY &&
+			 is_query_contain_limit_groupby(lrte->subquery)) ||
+			(rrte->rtekind == RTE_SUBQUERY &&
+			 is_query_contain_limit_groupby(rrte->subquery)))
+			return true;
+	}
+
+	return false;
 }
 
 /*****************************************************************************

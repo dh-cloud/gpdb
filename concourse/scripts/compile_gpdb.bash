@@ -1,4 +1,4 @@
-#!/bin/bash -l
+#!/bin/bash
 set -exo pipefail
 
 GREENPLUM_INSTALL_DIR=/usr/local/greenplum-db-devel
@@ -48,6 +48,21 @@ function prep_env() {
   esac
 }
 
+function install_libuv() {
+  local includedir=/usr/include
+  local libdir
+
+  case "${TARGET_OS}" in
+    centos | sles) libdir=/usr/lib64 ;;
+    ubuntu) libdir=/usr/lib/x86_64-linux-gnu ;;
+    *) return ;;
+  esac
+  # provided by build container
+  cp -a /usr/local/include/uv* ${includedir}/
+  cp -a /usr/local/lib/libuv* ${libdir}/
+}
+
+
 function install_deps_for_centos_or_sles() {
   rpm -i libquicklz-installer/libquicklz-*.rpm
   rpm -i libquicklz-devel-installer/libquicklz-*.rpm
@@ -64,6 +79,7 @@ function install_deps() {
     centos | sles) install_deps_for_centos_or_sles;;
     ubuntu) install_deps_for_ubuntu;;
   esac
+  install_libuv
 }
 
 function link_python() {
@@ -164,6 +180,21 @@ function include_libstdcxx() {
 
 }
 
+function include_libuv() {
+  local includedir=/usr/include
+  local libdir
+  case "${TARGET_OS}" in
+    centos | sles) libdir=/usr/lib64 ;;
+    ubuntu) libdir=/usr/lib/x86_64-linux-gnu ;;
+    *) return ;;
+  esac
+  pushd ${GREENPLUM_INSTALL_DIR}
+    # need to include both uv.h and uv/*.h
+    cp -a ${includedir}/uv* include
+    cp -a ${libdir}/libuv.so* lib
+  popd
+}
+
 function export_gpdb() {
   TARBALL="${GPDB_ARTIFACTS_DIR}/${GPDB_BIN_FILENAME}"
   local server_version
@@ -207,33 +238,33 @@ function export_gpdb_clients() {
     cp ${GREENPLUM_INSTALL_DIR}/lib/python/gppylib/__init__.py ./bin/ext/gppylib
     cp  ${GREENPLUM_INSTALL_DIR}/lib/python/gppylib/gpversion.py ./bin/ext/gppylib
     python -m compileall -q -x test .
+    # GPHOME_LOADERS and greenplum_loaders_path.sh are still requried by some users
+    # So link greenplum_loaders_path.sh to greenplum_clients_path.sh for compatible
+    ln -sf greenplum_clients_path.sh greenplum_loaders_path.sh
     chmod -R 755 .
     tar -czf "${TARBALL}" ./*
   popd
-}
-
-function fetch_orca_src {
-  local orca_tag="${1}"
-
-  mkdir orca_src
-  wget --quiet --output-document=- "https://github.com/greenplum-db/gporca/archive/${orca_tag}.tar.gz" \
-    | tar xzf - --strip-components=1 --directory=orca_src
 }
 
 function build_xerces()
 {
     OUTPUT_DIR="gpdb_src/gpAux/ext/${BLD_ARCH}"
     mkdir -p xerces_patch/concourse
-    cp -r orca_src/concourse/xerces-c xerces_patch/concourse
-    cp -r orca_src/patches/ xerces_patch
+    cp -r gpdb_src/src/backend/gporca/concourse/xerces-c xerces_patch/concourse
     /usr/bin/python xerces_patch/concourse/xerces-c/build_xerces.py --output_dir=${OUTPUT_DIR}
     rm -rf build
 }
 
-function build_and_test_orca()
+function test_orca()
 {
-    OUTPUT_DIR="gpdb_src/gpAux/ext/${BLD_ARCH}"
-    orca_src/concourse/build_and_test.py --build_type=RelWithDebInfo --output_dir=${OUTPUT_DIR}
+    if [ -n "${SKIP_UNITTESTS}" ]; then
+        return
+    fi
+    OUTPUT_DIR="../../../../gpAux/ext/${BLD_ARCH}"
+    pushd ${GPDB_SRC_PATH}/src/backend/gporca
+    concourse/build_and_test.py --build_type=RelWithDebInfo --output_dir=${OUTPUT_DIR}
+    concourse/build_and_test.py --build_type=Debug --output_dir=${OUTPUT_DIR}
+    popd
 }
 
 function _main() {
@@ -242,15 +273,13 @@ function _main() {
   case "${TARGET_OS}" in
     centos|ubuntu|sles)
       prep_env
-      fetch_orca_src "${ORCA_TAG}"
       build_xerces
-      build_and_test_orca
+      test_orca
       install_deps
       link_python
       ;;
     win32)
         export BLD_ARCH=win32
-        CONFIGURE_FLAGS="${CONFIGURE_FLAGS} --disable-pxf"
         ;;
     *)
         echo "only centos, ubuntu, sles and win32 are supported TARGET_OS'es"
@@ -274,7 +303,7 @@ function _main() {
   build_gpdb "${BLD_TARGET_OPTION[@]}"
   git_info
 
-  if [ "${TARGET_OS}" != "win32" ] ; then
+  if [[ "${TARGET_OS}" != "win32" ]] && [[ -z "${SKIP_UNITTESTS}" ]]; then
       # Don't unit test when cross compiling. Tests don't build because they
       # require `./configure --with-zlib`.
       unittest_check_gpdb
@@ -282,6 +311,7 @@ function _main() {
   include_zstd
   include_quicklz
   include_libstdcxx
+  include_libuv
   export_gpdb
   export_gpdb_extensions
   export_gpdb_win32_ccl

@@ -529,6 +529,12 @@ CConfigParamMapping::PackConfigParamInBitset
 		traceflag_bitset->ExchangeSet(GPOPT_DISABLE_XFORM_TF(CXform::ExfIndexGet2IndexScan));
 	}
 
+	if (!optimizer_enable_indexonlyscan)
+	{
+		// disable index only scan if the corresponding GUC is turned off
+		traceflag_bitset->ExchangeSet(GPOPT_DISABLE_XFORM_TF(CXform::ExfIndexGet2IndexOnlyScan));
+	}
+
 	if (!optimizer_enable_hashagg)
 	{
 		 traceflag_bitset->ExchangeSet(GPOPT_DISABLE_XFORM_TF(CXform::ExfGbAgg2HashAgg));
@@ -584,6 +590,9 @@ CConfigParamMapping::PackConfigParamInBitset
 	// enable nested loop index plans using nest params
 	// instead of outer reference as in the case with GPDB 4/5
 	traceflag_bitset->ExchangeSet(EopttraceIndexedNLJOuterRefAsParams);
+
+	// enable using opfamilies in distribution specs for GPDB 6
+	traceflag_bitset->ExchangeSet(EopttraceConsiderOpfamiliesForDistribution);
 
 	return traceflag_bitset;
 }

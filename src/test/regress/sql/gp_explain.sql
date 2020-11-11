@@ -131,7 +131,7 @@ explain (costs off) select count(*) over (partition by g) from generate_series(1
 -- The default init_file rules contain a line to mask this out in normal
 -- text-format EXPLAIN output, but it doesn't catch these alternative formats.
 -- start_matchignore
--- m/Optimizer.*Pivotal Optimizer \(GPORCA\) version .*/
+-- m/Optimizer.*Pivotal Optimizer \(GPORCA\)/
 -- end_matchignore
 
 CREATE EXTERNAL WEB TABLE dummy_ext_tab (x text) EXECUTE 'echo foo' FORMAT 'text';
@@ -147,7 +147,9 @@ explain (format yaml, costs off) SELECT * FROM dummy_aotab;
 explain (format xml, costs off) insert into dummy_aotab values (1);
 
 -- github issues 5795. explain fails previously.
+--start_ignore
 explain SELECT * from information_schema.key_column_usage;
+--end_ignore
 
 -- github issue 5794.
 set gp_enable_explain_allstat=on;

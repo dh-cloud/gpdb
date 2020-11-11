@@ -1232,13 +1232,13 @@ ProcessCopyOptions(CopyState cstate,
 {
 	bool		format_specified = false;
 	ListCell   *option;
-	bool		delim_off = false;
 
 	/* Support external use for option sanity checking */
 	if (cstate == NULL)
 		cstate = (CopyStateData *) palloc0(sizeof(CopyStateData));
 
 	cstate->escape_off = false;
+	cstate->delim_off = false;
 	cstate->file_encoding = -1;
 
 	/* Extract options from the statement node tree */
@@ -1291,7 +1291,7 @@ ProcessCopyOptions(CopyState cstate,
 			cstate->delim = defGetString(defel);
 
 			if (cstate->delim && pg_strcasecmp(cstate->delim, "off") == 0)
-				delim_off = true;
+				cstate->delim_off = true;
 		}
 		else if (strcmp(defel->defname, "null") == 0)
 		{
@@ -1417,7 +1417,7 @@ ProcessCopyOptions(CopyState cstate,
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
 						 errmsg("conflicting or redundant options")));
-			cstate->fill_missing = intVal(defel->arg);
+			cstate->fill_missing = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "newline") == 0)
 		{
@@ -1506,7 +1506,7 @@ ProcessCopyOptions(CopyState cstate,
 	 * future-proofing.  Likewise we disallow all digits though only octal
 	 * digits are actually dangerous.
 	 */
-	if (!cstate->csv_mode && !delim_off &&
+	if (!cstate->csv_mode && !cstate->delim_off &&
 		strchr("\\.abcdefghijklmnopqrstuvwxyz0123456789",
 			   cstate->delim[0]) != NULL)
 		ereport(ERROR,
@@ -1534,7 +1534,7 @@ ProcessCopyOptions(CopyState cstate,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("COPY quote must be a single one-byte character")));
 
-	if (cstate->csv_mode && cstate->delim[0] == cstate->quote[0] && !delim_off)
+	if (cstate->csv_mode && cstate->delim[0] == cstate->quote[0] && !cstate->delim_off)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("COPY delimiter and quote must be different")));
@@ -1609,7 +1609,7 @@ ProcessCopyOptions(CopyState cstate,
 	if (pg_database_encoding_max_length() == 1)
 	{
 		/* single byte encoding such as ascii, latinx and other */
-		if (strlen(cstate->delim) != 1 && !delim_off)
+		if (strlen(cstate->delim) != 1 && !cstate->delim_off)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("COPY delimiter must be a single one-byte character, or \'off\'")));
@@ -1617,7 +1617,7 @@ ProcessCopyOptions(CopyState cstate,
 	else
 	{
 		/* multi byte encoding such as utf8 */
-		if ((strlen(cstate->delim) != 1 || IS_HIGHBIT_SET(cstate->delim[0])) && !delim_off )
+		if ((strlen(cstate->delim) != 1 || IS_HIGHBIT_SET(cstate->delim[0])) && !cstate->delim_off )
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("COPY delimiter must be a single one-byte character, or \'off\'")));
@@ -1635,12 +1635,12 @@ ProcessCopyOptions(CopyState cstate,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("COPY delimiter cannot be backslash")));
 
-	if (strchr(cstate->null_print, cstate->delim[0]) != NULL && !delim_off)
+	if (strchr(cstate->null_print, cstate->delim[0]) != NULL && !cstate->delim_off)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("COPY delimiter must not appear in the NULL specification")));
 
-	if (delim_off)
+	if (cstate->delim_off)
 	{
 
 		/*
@@ -2550,16 +2550,16 @@ BeginCopyTo(Relation rel,
 }
 
 /*
- * Set up CopyState for writing to an external table.
+ * Set up CopyState for writing to a foreign or external table.
  */
 CopyState
-BeginCopyToForExternalTable(Relation extrel, List *options)
+BeginCopyToForeignTable(Relation forrel, List *options)
 {
 	CopyState	cstate;
 
-	Assert(RelationIsExternal(extrel));
+	Assert(RelationIsExternal(forrel) || RelationIsForeign(forrel));
 
-	cstate = BeginCopy(false, extrel, NULL, NULL, NIL, options, NULL);
+	cstate = BeginCopy(false, forrel, NULL, NULL, NIL, options, NULL);
 	cstate->dispatch_mode = COPY_DIRECT;
 
 	/*
@@ -5549,7 +5549,6 @@ retry:
 		MemoryContext oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
 		resultRelInfo = targetid_get_partition(frame.relid, estate, true);
-		estate->es_result_relation_info = resultRelInfo;
 		slot = reconstructMatchingTupleSlot(baseSlot, resultRelInfo);
 
 		MemoryContextSwitchTo(oldcontext);
@@ -5661,6 +5660,7 @@ retry:
 		goto retry;
 
 	ExecStoreVirtualTuple(slot);
+	estate->es_result_relation_info = resultRelInfo;
 
 	/*
 	 * Here we should compute defaults for any columns for which we didn't
@@ -6509,6 +6509,7 @@ CopyReadAttributesText(CopyState cstate, int stop_processing_at_field)
 {
 	char		delimc = cstate->delim[0];
 	char		escapec = cstate->escape_off ? delimc : cstate->escape[0];
+	bool		delim_off = cstate->delim_off;
 	int			fieldno;
 	char	   *output_ptr;
 	char	   *cur_ptr;
@@ -6594,7 +6595,7 @@ CopyReadAttributesText(CopyState cstate, int stop_processing_at_field)
 			if (cur_ptr >= line_end_ptr)
 				break;
 			c = *cur_ptr++;
-			if (c == delimc)
+			if (c == delimc && !delim_off)
 			{
 				found_delim = true;
 				break;
@@ -6755,6 +6756,7 @@ static int
 CopyReadAttributesCSV(CopyState cstate, int stop_processing_at_field)
 {
 	char		delimc = cstate->delim[0];
+	bool		delim_off = cstate->delim_off;
 	char		quotec = cstate->quote[0];
 	char		escapec = cstate->escape[0];
 	int			fieldno;
@@ -6842,7 +6844,7 @@ CopyReadAttributesCSV(CopyState cstate, int stop_processing_at_field)
 					goto endfield;
 				c = *cur_ptr++;
 				/* unquoted field delimiter */
-				if (c == delimc)
+				if (c == delimc && !delim_off)
 				{
 					found_delim = true;
 					goto endfield;

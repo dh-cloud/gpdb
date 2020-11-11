@@ -68,7 +68,7 @@ typedef enum {
 
 /* option_gp.c */
 void initialize_greenplum_user_options(void);
-bool process_greenplum_option(greenplumOption option, char *option_value);
+bool process_greenplum_option(greenplumOption option);
 bool is_greenplum_dispatcher_mode(void);
 bool is_checksum_mode(checksumMode mode);
 bool is_show_progress_mode(void);
@@ -106,7 +106,8 @@ void check_hash_partition_usage(void);
 void new_gpdb5_0_invalidate_indexes(void);
 Oid *get_numeric_types(PGconn *conn);
 void old_GPDB5_check_for_unsupported_distribution_key_data_types(void);
-void after_create_new_objects_greenplum(void);
+void invalidate_indexes(void);
+void reset_invalid_indexes(void);
 
 /* check_gp.c */
 

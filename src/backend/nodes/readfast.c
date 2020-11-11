@@ -1073,6 +1073,7 @@ _readCreateStmt_common(CreateStmt *local_node)
 	READ_OID_FIELD(ownerid);
 	READ_BOOL_FIELD(buildAoBlkdir);
 	READ_NODE_FIELD(attr_encodings);
+	READ_BOOL_FIELD(isCtas);
 
 	/*
 	 * Some extra checks to make sure we didn't get lost
@@ -1824,6 +1825,7 @@ _readFunctionScan(void)
 	READ_BOOL_FIELD(funcordinality);
 	READ_NODE_FIELD(param);
 	READ_BOOL_FIELD(resultInTupleStore);
+	READ_INT_FIELD(initplanId);
 
 	READ_DONE();
 }

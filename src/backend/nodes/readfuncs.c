@@ -714,6 +714,7 @@ _readRefreshClause(void)
 	READ_LOCALS(RefreshClause);
 
 	READ_BOOL_FIELD(concurrent);
+	READ_BOOL_FIELD(skipData);
 	READ_NODE_FIELD(relation);
 
 	READ_DONE();
@@ -2332,6 +2333,7 @@ _readCreateStmt(void)
 	READ_OID_FIELD(ownerid);
 	READ_BOOL_FIELD(buildAoBlkdir);
 	READ_NODE_FIELD(attr_encodings);
+	READ_BOOL_FIELD(isCtas);
 
 	READ_DONE();
 }
@@ -2832,6 +2834,7 @@ _readCdbProcess(void)
 	READ_INT_FIELD(listenerPort);
 	READ_INT_FIELD(pid);
 	READ_INT_FIELD(contentid);
+	READ_INT_FIELD(dbid);
 
 	READ_DONE();
 }

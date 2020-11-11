@@ -770,6 +770,7 @@ _outFunctionScan(StringInfo str, const FunctionScan *node)
 	WRITE_BOOL_FIELD(funcordinality);
 	WRITE_NODE_FIELD(param);
 	WRITE_BOOL_FIELD(resultInTupleStore);
+	WRITE_INT_FIELD(initplanId);
 }
 
 static void
@@ -1350,6 +1351,7 @@ _outRefreshClause(StringInfo str, const RefreshClause *node)
 	WRITE_NODE_TYPE("REFRESHCLAUSE");
 
 	WRITE_BOOL_FIELD(concurrent);
+	WRITE_BOOL_FIELD(skipData);
 	WRITE_NODE_FIELD(relation);
 }
 
@@ -2591,6 +2593,7 @@ _outCreateStmtInfo(StringInfo str, const CreateStmt *node)
 	WRITE_OID_FIELD(ownerid);
 	WRITE_BOOL_FIELD(buildAoBlkdir);
 	WRITE_NODE_FIELD(attr_encodings);
+	WRITE_BOOL_FIELD(isCtas);
 }
 
 static void
@@ -4432,6 +4435,7 @@ _outCdbProcess(StringInfo str, const CdbProcess *node)
 	WRITE_INT_FIELD(listenerPort);
 	WRITE_INT_FIELD(pid);
 	WRITE_INT_FIELD(contentid);
+	WRITE_INT_FIELD(dbid);
 }
 
 static void

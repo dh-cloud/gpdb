@@ -59,6 +59,9 @@
             <xref href="#topic22" type="topic" format="dita"/>
           </li>
       <li>
+        <xref href="#moverg" type="topic" format="dita"/>
+      </li>
+      <li>
         <xref href="#topic777999" type="topic" format="dita"/>
       </li>
     </ul>
@@ -259,6 +262,12 @@
             href="../ref_guide/config_params/guc-list.xml#gp_resource_group_bypass" type="section"
             scope="peer">gp_resource_group_bypass</xref></codeph> to bypass a resource group
         concurrency limit.</p>
+      <p>You can set the server configuration parameter <codeph><xref
+            href="../ref_guide/config_params/guc-list.xml#gp_resource_group_queuing_timeout" type="section"
+            scope="peer">gp_resource_group_queuing_timeout</xref></codeph> to specify the
+         amount of time a transaction remains in the queue before Greenplum Database
+         cancels the transaction. The default timeout is zero, Greenplum queues
+         transactions indefinitely.</p>
     </body>
   </topic>
   <topic id="topic833971717" xml:lang="en">
@@ -832,7 +841,7 @@ gpstart
     </body>
   </topic>
   <topic id="topic_jlz_hzg_pkb">
-    <title>Configuring Automatic Query Termination</title>
+    <title>Configuring Automatic Query Termination Based on Memory Usage</title>
     <body>
       <p>When resource groups have a global shared memory pool, the server configuration parameter
             <codeph><xref
@@ -1010,7 +1019,14 @@ gpstart
           queue but has not yet been executed. Or, you may want to stop a running query that is
           taking too long to execute, or one that is sitting idle in a transaction and taking up
           resource group transaction slots that are needed by other users.</p>
-        <p>To cancel a running or queued transaction, you must first determine the process id (pid)
+        <p>By default, transactions can remain queued in a resource group indefinitely.
+          If you want Greenplum Database to cancel a queued transaction after a
+          specific amount of time, set the server configuration parameter <codeph><xref
+            href="../ref_guide/config_params/guc-list.xml#gp_resource_group_queuing_timeout" type="section"
+            scope="peer">gp_resource_group_queuing_timeout</xref></codeph>. When this
+          parameter is set to a value (milliseconds) greater than 0, Greenplum cancels
+          any queued transaction when it has waited longer than the configured timeout.</p>
+        <p>To manually cancel a running or queued transaction, you must first determine the process id (pid)
           associated with the transaction. Once you have obtained the process id, you can invoke
             <codeph>pg_cancel_backend()</codeph> to end that process, as shown below.</p>
         <p>For example, to view the process information associated with all statements currently
@@ -1043,6 +1059,73 @@ gpstart
         </note>
       </body>
     </topic>
+  </topic>
+  <topic id="moverg" xml:lang="en">
+    <title>Moving a Query to a Different Resource Group</title>
+    <body>
+      <p>A user with Greenplum Database superuser privileges can run the
+        <codeph>gp_toolkit.pg_resgroup_move_query()</codeph> function to move a
+        running query from one resource group to another, without stopping the
+        query. Use this function to expedite a long-running query by moving it to
+        a resource group with a higher resource allotment or availability.</p>
+      <note>You can move only an active or running query to a new resource group.
+        You cannot move a queued or pending query that is in an idle state due to
+        concurrency or memory limits.</note>
+      <p><codeph>pg_resgroup_move_query()</codeph> requires the process id
+        (pid) of the running query, as well as the name of the resource group
+        to which you want to move the query. The signature of the function follows:</p>
+      <codeblock>pg_resgroup_move_query( pid int4, group_name text );</codeblock>
+      <p>You can obtain the pid of a running query from the
+        <codeph>pg_stat_activity</codeph> system view as described in
+        <xref href="#topic27" type="topic" format="dita"/>. Use the
+        <codeph>gp_toolkit.gp_resgroup_status</codeph> view to list the name, id,
+        and status of each resource group.</p>
+      <p>When you invoke <codeph>pg_resgroup_move_query()</codeph>, the query is
+        subject to the limits configured for the destination resource group:</p>
+      <ul>
+        <li>If the group has already reached its concurrent task limit,
+          Greenplum Database queues the query until a slot opens.</li>
+        <li>If the destination resource group does not have enough memory
+          available to service the query's current memory requirements,
+          Greenplum Database returns the error: 
+          <codeph>group &lt;group_name> doesn't have enough memory ...</codeph>.
+          In this situation, you may choose to increase the group shared memory
+          allotted to the destination resource group, or perhaps wait a period
+          of time for running queries to complete and then invoke the function
+          again.</li>
+      </ul>
+      <p>After Greenplum moves the query, there is no way to guarantee that a
+        query currently running in the destination resource group does not
+        exceed the group memory quota. In this situation, one or more running
+        queries in the destination group may fail, including the moved query.
+        Reserve enough resource group global shared memory to minimize the
+        potential for this scenario to occur.</p>
+      <p><codeph>pg_resgroup_move_query()</codeph> moves only the specified
+        query to the destination resource group. Greenplum Database assigns
+        subsequent queries that you submit in the session to the original
+        resource group.</p>
+      <note>Greenplum Database version 6.8 introduced support for moving a query
+        to a different resource group.<ul>
+        <li>If you upgraded from a previous Greenplum 6.x installation, you must
+          manually register the supporting functions for this feature, and grant
+          access to the functions as follows:
+          <codeblock>CREATE FUNCTION gp_toolkit.pg_resgroup_check_move_query(IN session_id int, IN groupid oid, OUT session_mem int, OUT available_mem int)
+RETURNS SETOF record
+AS 'gp_resource_group', 'pg_resgroup_check_move_query'
+VOLATILE LANGUAGE C;
+GRANT EXECUTE ON FUNCTION gp_toolkit.pg_resgroup_check_move_query(int, oid, OUT int, OUT int) TO public;
+
+CREATE FUNCTION gp_toolkit.pg_resgroup_move_query(session_id int4, groupid text)
+RETURNS bool
+AS 'gp_resource_group', 'pg_resgroup_move_query'
+VOLATILE LANGUAGE C;
+GRANT EXECUTE ON FUNCTION gp_toolkit.pg_resgroup_move_query(int4, text) TO public;</codeblock></li>
+        <li>If you register the supporting functions and then you downgrade
+          your Greenplum Database installation to version 6.7.x or older,
+          manually drop these functions as follows:
+          <codeblock>DROP FUNCTION gp_toolkit.pg_resgroup_check_move_query(IN int, IN oid, OUT int, OUT int);
+DROP FUNCTION gp_toolkit.pg_resgroup_move_query(int4, text);</codeblock></li></ul></note>
+    </body>
   </topic>
   <topic id="topic777999" xml:lang="en">
     <title>Resource Group Frequently Asked Questions</title>

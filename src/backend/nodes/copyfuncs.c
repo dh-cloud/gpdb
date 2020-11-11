@@ -757,6 +757,7 @@ _copyFunctionScan(const FunctionScan *from)
 	COPY_SCALAR_FIELD(funcordinality);
 	COPY_NODE_FIELD(param);
 	COPY_SCALAR_FIELD(resultInTupleStore);
+	COPY_SCALAR_FIELD(initplanId);
 
 	return newnode;
 }
@@ -3544,6 +3545,7 @@ CopyCreateStmtFields(const CreateStmt *from, CreateStmt *newnode)
 	COPY_SCALAR_FIELD(ownerid);
 	COPY_SCALAR_FIELD(buildAoBlkdir);
 	COPY_NODE_FIELD(attr_encodings);
+	COPY_SCALAR_FIELD(isCtas);
 }
 
 static CreateStmt *
@@ -4847,6 +4849,7 @@ _copyCdbProcess(const CdbProcess *from)
 	COPY_SCALAR_FIELD(listenerPort);
 	COPY_SCALAR_FIELD(pid);
 	COPY_SCALAR_FIELD(contentid);
+	COPY_SCALAR_FIELD(dbid);
 
 	return newnode;
 }

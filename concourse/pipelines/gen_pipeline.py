@@ -74,9 +74,6 @@ JOBS_THAT_SHOULD_NOT_BLOCK_RELEASE = (
         'test_gpdb_clients_windows',
         'walrep_2',
         'Publish Server Builds',
-        'compile_gpdb_sles12',
-        'icw_gporca_sles12',
-        'icw_planner_sles12',
     ] + RELEASE_VALIDATOR_JOB + JOBS_THAT_ARE_GATES
 )
 
@@ -295,7 +292,7 @@ def main():
         action='store',
         dest='os_types',
         default=['centos6'],
-        choices=['centos6', 'centos7', 'ubuntu18.04', 'sles12', 'win'],
+        choices=['centos6', 'centos7', 'oracle7', 'ubuntu18.04', 'win'],
         nargs='+',
         help='List of OS values to support'
     )
@@ -372,7 +369,7 @@ def main():
         args.pipeline_configuration = 'prod'
 
     if args.pipeline_configuration == 'prod' or args.pipeline_configuration == 'full':
-        args.os_types = ['centos6', 'centos7', 'ubuntu18.04', 'sles12', 'win']
+        args.os_types = ['centos6', 'centos7', 'oracle7', 'ubuntu18.04', 'win']
         args.test_sections = [
             'ICW',
             'Replication',
@@ -384,6 +381,10 @@ def main():
             'Extensions',
             'Gpperfmon'
         ]
+    # currently, ICW tests for oracle7 consumes the artifact produced by centos7
+    if 'oracle7' in args.os_types and not 'centos7' in args.os_types:
+        print("oracle7 depends on centos7")
+        args.os_types.append('centos7')
 
     # if generating a dev pipeline but didn't specify an output,
     # don't overwrite the 6X_STABLE pipeline

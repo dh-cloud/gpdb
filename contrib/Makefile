@@ -5,11 +5,11 @@ top_builddir = ..
 include $(top_builddir)/src/Makefile.global
 
 SUBDIRS = \
+		amcheck		\
 		auth_delay	\
 		auto_explain	\
 		btree_gin	\
 		citext		\
-		dblink		\
 		dict_int	\
 		dict_xsyn	\
 		dummy_seclabel	\
@@ -35,7 +35,6 @@ SUBDIRS = \
 		pgrowlocks	\
 		pgstattuple	\
 		pg_xlogdump	\
-		postgres_fdw	\
 		seg		\
 		spi		\
 		tcn		\
@@ -50,6 +49,14 @@ SUBDIRS = \
 #		tablefunc	\
 #		vacuumlo
 #		worker_spi 
+
+#disable dblink and postgres_fdw on Mac
+OS := $(shell uname -s)
+ifneq ($(OS),Darwin)
+SUBDIRS += \
+		dblink	\
+		postgres_fdw
+endif
 
 # Greenplum-specific additions (to ease merge pain).
 SUBDIRS += \

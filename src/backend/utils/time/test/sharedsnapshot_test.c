@@ -59,12 +59,6 @@ test_write_read_shared_snapshot_for_cursor(void **state)
 	expect_any(LWLockAcquire, mode);
 	will_be_called(LWLockAcquire);
 
-	expect_any_count(FaultInjector_InjectFaultIfSet, faultName, 11);
-	expect_any_count(FaultInjector_InjectFaultIfSet, ddlStatement, 11);
-	expect_any_count(FaultInjector_InjectFaultIfSet, databaseName, 11);
-	expect_any_count(FaultInjector_InjectFaultIfSet, tableName, 11);
-	will_be_called_count(FaultInjector_InjectFaultIfSet, 11);
-
 	expect_any(LWLockRelease, l);
 	will_be_called(LWLockRelease);
 
@@ -100,10 +94,10 @@ static void
 test_boundaries_of_CreateSharedSnapshotArray(void **state)
 {
 	/*
-	 * max_prepared_xacts is used to calculate NUM_SHARED_SNAPSHOT_SLOTS. Make
+	 * MaxBackends is used to calculate NUM_SHARED_SNAPSHOT_SLOTS. Make
 	 * it non-zero so that we actually allocate some local snapshot slots.
 	 */
-	max_prepared_xacts = 2;
+	MaxBackends = 2;
 
 	SharedSnapshotStruct *fakeSharedSnapshotArray = NULL;
 

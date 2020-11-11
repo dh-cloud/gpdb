@@ -38,14 +38,9 @@ import platform
 try:
     from pygresql import pg
 except Exception, e:
-    from struct import calcsize
-    sysWordSize = calcsize("P") * 8
-    if (platform.system()) in ['Windows', 'Microsoft'] and (sysWordSize == 64):
-        errorMsg = "gpload appears to be running in 64-bit Python under Windows.\n"
-        errorMsg = errorMsg + "Currently only 32-bit Python is supported. Please \n"
-        errorMsg = errorMsg + "reinstall a 32-bit Python interpreter.\n"
-    else:
-        errorMsg = "gpload was unable to import The PyGreSQL Python module (pg.py) - %s\n" % str(e)
+    errorMsg = "gpload was unable to import The PyGreSQL Python module (pg.py) - %s\n" % str(e)
+    sys.stderr.write(str(errorMsg))
+    errorMsg = "Please check if you have the correct Visual Studio redistributable package installed.\n"
     sys.stderr.write(str(errorMsg))
     sys.exit(2)
 
@@ -117,6 +112,7 @@ valid_tokens = {
     "quote": {'parse_children': True, 'parent': "input"},
     "encoding": {'parse_children': True, 'parent': "input"},
     "force_not_null": {'parse_children': False, 'parent': "input"},
+    "fill_missing_fields": {'parse_children': False, 'parent': "input"},
     "error_limit": {'parse_children': True, 'parent': "input"},
     "error_percent": {'parse_children': True, 'parent': "input"},
     "error_table": {'parse_children': True, 'parent': "input"},
@@ -1274,7 +1270,7 @@ class gpload:
         try:
             # do an initial parse, validating the config file
             doc = f.read()
-            self.config = yaml.load(doc)
+            self.config = yaml.safe_load(doc)
 
             self.configOriginal = changeToUnicode(self.config)
             self.config = dictKeyToLower(self.config)
@@ -2370,6 +2366,10 @@ class gpload:
         else:
             from_cols = self.from_columns
 
+        if formatType == 'csv' or formatType == 'text':
+            if self.getconfig('gpload:input:fill_missing_fields', bool, False):
+                self.formatOpts += 'fill missing fields'
+
         # If the 'reuse tables' option was specified we now try to find an
         # already existing external table in the catalog which will match
         # the one that we need to use. It must have identical attributes,
@@ -2809,6 +2809,8 @@ class gpload:
         if self.error_table:
             self.log_errors = True
             self.reuse_tables = True
+            self.staging_table = self.getconfig('gpload:preload:staging_table', unicode, default=None)
+            self.fast_match = self.getconfig('gpload:preload:fast_match',bool,False)
         if truncate == True:
             if method=='insert':
                 self.do_truncate(self.schemaTable)

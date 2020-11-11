@@ -2223,14 +2223,19 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 				 * change the previous root->parse Query node, which makes the
 				 * current sort_pathkeys invalid.
 				 */
+				PlannerInfo *subroot = makeNode(PlannerInfo);
+
+				memcpy(subroot, root, sizeof(PlannerInfo));
+				subroot->eq_classes = NULL;
+
 				if (parse->distinctClause)
 					root->distinct_pathkeys =
-						make_pathkeys_for_sortclauses(root,
+						make_pathkeys_for_sortclauses(subroot,
 													  parse->distinctClause,
 													  result_plan->targetlist);
 				if (parse->sortClause)
 					root->sort_pathkeys =
-						make_pathkeys_for_sortclauses(root,
+						make_pathkeys_for_sortclauses(subroot,
 													  parse->sortClause,
 													  result_plan->targetlist);
 			}
@@ -2814,7 +2819,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		 * SELECT DISTINCT query as argument to a table function?
 		 */
 		!parse->isTableValueSelect &&
-		!parse->limitCount && !parse->limitOffset)
+		!limit_needed(parse))
 	{
 		must_gather = true;
 	}
@@ -3213,6 +3218,12 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 										  offset_est,
 										  count_est);
 		result_plan->flow = pull_up_Flow(result_plan, result_plan->lefttree);
+
+		if (result_plan->flow->locustype == CdbLocusType_General)
+		{
+			result_plan->flow->locustype = CdbLocusType_SingleQE;
+			result_plan->flow->flotype = FLOW_SINGLETON;
+		}
 	}
 
 	/*

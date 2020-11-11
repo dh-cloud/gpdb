@@ -954,6 +954,8 @@ HINT:  Use WITHOUT VALIDATION.
 alter table foo_p exchange partition for(rank(3)) with table bar_p without validation;
 truncate foo_p;
 ERROR:  "foo_p_1_prt_3" is an external relation and can't be truncated
+analyze foo_p;
+WARNING:  skipping "foo_p_1_prt_3" --- cannot analyze non-tables or special system tables
 drop table foo_p;
 drop table bar_p;
 -- Check for overflow of circular data types like time
@@ -4173,6 +4175,36 @@ select * from pg_indexes where schemaname = 'public' and tablename like 'ti%';
 (0 rows)
 
 drop table ti;
+-- Partitioned table with btree index and hash aggregate should use a correct
+-- memory context for its tuples` descriptor
+drop table if exists dis_tupdesc;
+NOTICE:  table "dis_tupdesc" does not exist, skipping
+create table dis_tupdesc (a int, b int, c int)
+distributed by (a)
+partition by list (b)
+(
+    partition p1 values (1),
+    partition p2 values (2),
+    default partition junk_data
+);
+NOTICE:  CREATE TABLE will create partition "dis_tupdesc_1_prt_p1" for table "dis_tupdesc"
+NOTICE:  CREATE TABLE will create partition "dis_tupdesc_1_prt_p2" for table "dis_tupdesc"
+NOTICE:  CREATE TABLE will create partition "dis_tupdesc_1_prt_junk_data" for table "dis_tupdesc"
+create index dis_tupdesc_idx on dis_tupdesc using btree (c);
+insert into dis_tupdesc select i, i % 3, i % 4 from generate_series (1, 240) as i;
+analyze dis_tupdesc;
+set gp_segments_for_planner = 2;
+set optimizer_segments = 2;
+select distinct b from dis_tupdesc where c >= 2;
+ b 
+---
+ 0
+ 1
+ 2
+(3 rows)
+
+reset gp_segments_for_planner;
+reset optimizer_segments;
 -- MPP-6611, make sure rename works with default partitions
 create table it (i int, j int) partition by range(i) 
 subpartition by range(j) subpartition template(start(1) end(10) every(5))

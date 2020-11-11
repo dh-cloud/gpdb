@@ -1310,6 +1310,7 @@ create_projection_plan(PlannerInfo *root, ProjectionPath *best_path)
 	 * not using.)
 	 */
 	if (!best_path->cdb_restrict_clauses &&
+		!best_path->force &&
 		(is_projection_capable_plan(subplan) ||
 		 tlist_same_exprs(tlist, subplan->targetlist)))
 	{
@@ -6480,6 +6481,12 @@ make_modifytable(PlannerInfo *root,
 	{
 		Plan	   *subplan = (Plan *) lfirst(subnode);
 
+		if (operation != CMD_INSERT &&
+			(subplan->flow->locustype == CdbLocusType_SegmentGeneral ||
+			 subplan->flow->locustype == CdbLocusType_General) &&
+			contain_volatile_functions((Node *) subplan->targetlist))
+			elog(ERROR, "could not devise a plan");
+
 		if (subnode == list_head(subplans))		/* first node? */
 			plan->startup_cost = subplan->startup_cost;
 		plan->total_cost += subplan->total_cost;
@@ -7259,6 +7266,13 @@ append_initplan_for_function_scan(PlannerInfo *root, Path *best_path, Plan *plan
 	RangeTblFunction	*rtfunc;
 	FuncExpr	*funcexpr;
 
+	/*
+	 * In utility mode (or when planning a local query in QE), ignore EXECUTE
+	 * ON markings and run the function the normal way.
+	 */
+	if (Gp_role != GP_ROLE_DISPATCH)
+		return;
+
 	/* Currently we limit function number to one */
 	if (list_length(fsplan->functions) != 1)
 		return;
@@ -7308,6 +7322,7 @@ append_initplan_for_function_scan(PlannerInfo *root, Path *best_path, Plan *plan
 
 	/* create initplan for this FunctionScan plan */
 	FunctionScan* initplan =(FunctionScan*) copyObject(plan);
+	initplan->resultInTupleStore = false;
 	
 	/*
 	 * the following param of initplan is a dummy param.
@@ -7327,8 +7342,11 @@ append_initplan_for_function_scan(PlannerInfo *root, Path *best_path, Plan *plan
      * init_plans list earlier, so make sure we don't put back any duplicate
      * entries.
      */
-    root->init_plans = list_concat_unique_ptr(root->init_plans,
-                                              subroot->init_plans);
+	root->init_plans = list_concat_unique_ptr(root->init_plans,
+											  subroot->init_plans);
+
+	/* record the initplan id which is used to find the right tuplestore */
+	fsplan->initplanId = list_length(root->glob->subplans);
 
 	/* Decorate the top node of the plan with a Flow node. */
 	initplan->scan.plan.flow = cdbpathtoplan_create_flow(root,

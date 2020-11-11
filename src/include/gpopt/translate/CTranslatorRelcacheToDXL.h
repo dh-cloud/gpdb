@@ -166,7 +166,9 @@ namespace gpdxl
 				IMDFunction::EFuncStbl *stability, // output: function stability
 				IMDFunction::EFuncDataAcc *access, // output: function data access
 				BOOL *is_strict, // output: is function strict?
-				BOOL *ReturnsSet // output: does function return set?
+				BOOL *is_ndv_preserving, // output: preserves NDVs of inputs
+				BOOL *ReturnsSet, // output: does function return set?
+				BOOL *is_allowed_for_PS // output: is this an increasing function (lossy cast) allowed for partition selection
 				);
 
 			// check and fall back for unsupported relations
@@ -388,6 +390,9 @@ namespace gpdxl
 			// retrieve the opfamilies mdids for the given index
 			static
 			IMdIdArray *RetrieveIndexOpFamilies(CMemoryPool *mp, IMDId *mdid_index);
+
+			static
+			IMdIdArray *RetrieveRelDistributionOpFamilies(CMemoryPool *mp, GpPolicy *policy);
 
             // for non-leaf partition tables return the number of child partitions
             // else return 1

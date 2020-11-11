@@ -430,7 +430,7 @@ COptTasks::CreateOptimizerConfig
 	return GPOS_NEW(mp) COptimizerConfig
 						(
 						GPOS_NEW(mp) CEnumeratorConfig(mp, plan_id, num_samples, cost_threshold),
-						GPOS_NEW(mp) CStatisticsConfig(mp, damping_factor_filter, damping_factor_join, damping_factor_groupby),
+						GPOS_NEW(mp) CStatisticsConfig(mp, damping_factor_filter, damping_factor_join, damping_factor_groupby, MAX_STATS_BUCKETS),
 						GPOS_NEW(mp) CCTEConfig(cte_inlining_cutoff),
 						cost_model,
 						GPOS_NEW(mp) CHint
@@ -626,7 +626,10 @@ COptTasks::OptimizeTask
 
 			BOOL is_master_only = !optimizer_enable_motions ||
 						(!optimizer_enable_motions_masteronly_queries && !query_to_dxl_translator->HasDistributedTables());
-			CAutoTraceFlag atf(EopttraceDisableMotions, is_master_only);
+			// See NoteDistributionPolicyOpclasses() in src/backend/gpopt/translate/CTranslatorQueryToDXL.cpp
+			BOOL use_legacy_opfamilies = (query_to_dxl_translator->GetDistributionHashOpsKind() == DistrUseLegacyHashOps);
+			CAutoTraceFlag atf1(EopttraceDisableMotions, is_master_only);
+			CAutoTraceFlag atf2(EopttraceUseLegacyOpfamilies, use_legacy_opfamilies);
 
 			plan_dxl = COptimizer::PdxlnOptimize
 									(
@@ -690,7 +693,7 @@ COptTasks::OptimizeTask
 		IErrorContext *errctxt = CTask::Self()->GetErrCtxt();
 
 		opt_ctxt->m_should_error_out = ShouldErrorOut(ex);
-		opt_ctxt->m_is_unexpected_failure = IsUnexpectedFailure(ex);
+		opt_ctxt->m_is_unexpected_failure = IsLoggableFailure(ex);
 		opt_ctxt->m_error_msg = CreateMultiByteCharStringFromWCString(errctxt->GetErrorMsg());
 
 		GPOS_RETHROW(ex);

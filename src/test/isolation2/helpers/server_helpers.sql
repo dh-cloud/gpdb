@@ -20,19 +20,26 @@ returns text as $$
         cmd = 'pg_ctl promote -D %s' % datadir
     elif command in ('stop', 'restart'):
         cmd = 'pg_ctl -l postmaster.log -D %s ' % datadir
-        cmd = cmd + '-w -m %s %s' % (command_mode, command)
+        cmd = cmd + '-w -t 600 -m %s %s' % (command_mode, command)
     else:
         return 'Invalid command input'
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             shell=True)
     stdout, stderr = proc.communicate()
-    if proc.returncode == 0:
+
+    # GPDB_12_MERGE_FIXME: upstream patch f13ea95f9e473a43ee4e1baeb94daaf83535d37c
+    # (Change pg_ctl to detect server-ready by watching status in postmaster.pid.)
+    # makes pg_ctl return 1 when the postgres is still starting up after timeout
+    # so there is only need of checking of returncode then. For now we still
+    # need to check stdout additionally since if the postgres is starting up
+    # pg_ctl still returns 0 after timeout.
+
+    if proc.returncode == 0 and stdout.find("server is still starting up") == -1:
         return 'OK'
     else:
         raise PgCtlError(stdout+'|'+stderr)
 $$ language plpythonu;
-
 
 --
 -- pg_ctl_start:
@@ -119,3 +126,73 @@ $$ language plpgsql;
 create or replace function master() returns setof gp_segment_configuration as $$
 	select * from gp_segment_configuration where role='p' and content=-1;
 $$ language sql;
+
+create or replace function wait_until_segment_synchronized(segment_number int) returns text as $$
+begin
+	for i in 1..1200 loop
+		if (select count(*) = 0 from gp_segment_configuration where content = segment_number and mode != 's') then
+			return 'OK';
+		end if;
+		perform pg_sleep(0.1);
+		perform gp_request_fts_probe_scan();
+	end loop;
+	return 'Fail';
+end;
+$$ language plpgsql;
+
+create or replace function wait_until_all_segments_synchronized() returns text as $$
+begin
+	for i in 1..1200 loop
+		if (select count(*) = 0 from gp_segment_configuration where content != -1 and mode != 's') then
+			return 'OK';
+		end if;
+		perform pg_sleep(0.1);
+		perform gp_request_fts_probe_scan();
+	end loop;
+	return 'Fail';
+end;
+$$ language plpgsql;
+
+create or replace function wait_for_replication_replay (segid int, retries int) returns bool as
+$$
+declare
+	i int;
+	result bool;
+begin
+	i := 0;
+	-- Wait until the mirror/standby has replayed up to flush location
+	loop
+		SELECT flush_location = replay_location INTO result from gp_stat_replication where gp_segment_id = segid;
+		if result then
+			return true;
+		end if;
+
+		if i >= retries then
+		   return false;
+		end if;
+		perform pg_sleep(0.1);
+		perform pg_stat_clear_snapshot();
+		i := i + 1;
+	end loop;
+end;
+$$ language plpgsql;
+
+create or replace function wait_until_standby_in_state(targetstate text)
+returns text as $$
+declare
+   replstate text;
+   i int;
+begin
+   i := 0;
+   while i < 1200 loop
+      select state into replstate from pg_stat_replication;
+      if replstate = targetstate then
+          return replstate;
+      end if;
+      perform pg_sleep(0.1);
+      perform pg_stat_clear_snapshot();
+      i := i + 1;
+   end loop;
+   return replstate;
+end;
+$$ language plpgsql;

@@ -107,10 +107,8 @@ extern Relation heap_openrv_extended(const RangeVar *relation,
 #define heap_close(r,l)  relation_close(r,l)
 
 /* CDB */
-extern Relation CdbOpenRelation(Oid relid, LOCKMODE reqmode, bool noWait, 
-								bool *lockUpgraded);
-extern Relation CdbTryOpenRelation(Oid relid, LOCKMODE reqmode,
-								   bool noWait, bool *lockUpgraded);
+extern Relation CdbOpenRelation(Oid relid, LOCKMODE reqmode, bool *lockUpgraded);
+extern Relation CdbTryOpenRelation(Oid relid, LOCKMODE reqmode, bool *lockUpgraded);
 extern Relation CdbOpenRelationRv(const RangeVar *relation, LOCKMODE reqmode, 
 								  bool noWait, bool *lockUpgraded);
 
@@ -158,7 +156,7 @@ extern void heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 				  CommandId cid, int options, BulkInsertState bistate, TransactionId xid);
 extern HTSU_Result heap_delete(Relation relation, ItemPointer tid,
 			CommandId cid, Snapshot crosscheck, bool wait,
-			HeapUpdateFailureData *hufd);
+			HeapUpdateFailureData *hufd, bool isSplitUpdate);
 extern HTSU_Result heap_update(Relation relation, ItemPointer otid,
 			HeapTuple newtup,
 			CommandId cid, Snapshot crosscheck, bool wait,

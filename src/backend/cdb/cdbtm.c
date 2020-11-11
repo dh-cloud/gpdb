@@ -328,14 +328,16 @@ notifyCommittedDtxTransaction(void)
 			/* Already notified for one phase commit or no need to notify. */
 			break;
 		default:
+			;
+			TransactionId xid = GetTopTransactionIdIfAny();
+			bool markXidCommitted = TransactionIdIsValid(xid);
 			/*
 			 * If local commit xlog is written we can not throw error and then
 			 * abort transaction (that will cause panic) so directly panic
 			 * for that case with more details.
 			 */
-			ereport(ExecutorDidWriteXLog() ? PANIC : ERROR,
-					(errmsg("Unexpected DTX state"),
-					 TM_ERRDETAIL));
+			ereport(markXidCommitted ? PANIC : ERROR,
+					(errmsg("Unexpected DTX state"), TM_ERRDETAIL));
 	}
 
 
@@ -644,6 +646,8 @@ doNotifyingCommitPrepared(void)
 			(errmsg("the distributed transaction 'Commit Prepared' broadcast succeeded to all the segments"),
 			TM_ERRDETAIL));
 
+	SIMPLE_FAULT_INJECTOR("dtm_before_insert_forget_comitted");
+
 	doInsertForgetCommitted();
 }
 
@@ -860,11 +864,11 @@ prepareDtxTransaction(void)
 
 	/*
 	 * If only one segment was involved in the transaction, and no local XID
-	 * has been assigned on the QD either, we can perform one-phase commit
-	 * on that one segment. Otherwise, broadcast PREPARE TRANSACTION to the
-	 * segments.
+	 * has been assigned on the QD either, or there is no xlog writing related
+	 * to this transaction on all segments, we can perform one-phase commit.
+	 * Otherwise, broadcast PREPARE TRANSACTION to the segments.
 	 */
-	if (!ExecutorDidWriteXLog() ||
+	if (!TopXactExecutorDidWriteXLog() ||
 		(!markXidCommitted && list_length(MyTmGxactLocal->dtxSegments) < 2))
 	{
 		setCurrentDtxState(DTX_STATE_ONE_PHASE_COMMIT);
@@ -1056,13 +1060,36 @@ tmShmemInit(void)
 	bool		found;
 	TmControlBlock *shared;
 
+	if (Gp_role == GP_ROLE_DISPATCH && max_prepared_xacts < MaxConnections)
+		elog(WARNING, "Better set max_prepared_transactions greater than max_connections");
+
 	/*
-	 * max_prepared_xacts is a guc which is postmaster-startup setable -- it
-	 * can only be updated by restarting the system. Global transactions will
-	 * all use two-phase commit, so the number of global transactions is bound
-	 * to the number of prepared.
+	 * max_prepared_transactions is a guc which is postmaster-startup setable
+	 * -- it can only be updated by restarting the system. Global transactions
+	 *  will all use two-phase commit, so the number of global transactions is
+	 *  bound to the number of prepared.
+	 *
+	 * Note on master, it is possible that some prepared xacts just use partial
+	 * gang so on QD the total prepared xacts might be quite large but it is
+	 * limited by max_connections since one QD should only have one 2pc one
+	 * time, so if we set max_tm_gxacts as max_prepared_transactions as before,
+	 * shmCommittedGxactArray might not be able to accommodate committed but
+	 * not forgotten transactions (standby recovery will fail if encountering
+	 * this issue) if max_prepared_transactions is smaller than max_connections
+	 * (though this is not suggested). Not to mention that
+	 * max_prepared_transactions might be inconsistent between master/standby
+	 * and segments (though this is not suggested).
+	 *
+	 * We can assign MaxBackends (MaxConnections should be fine also but let's
+	 * be conservative) to max_tm_gxacts on master/standby to tolerate various
+	 * configuration combinations of max_prepared_transactions and
+	 * max_connections. For segments or utility mode, max_tm_gxacts is useless
+	 * so let's set it as zero to save memory.
 	 */
-	max_tm_gxacts = max_prepared_xacts;
+	if (Gp_role == GP_ROLE_DISPATCH)
+		max_tm_gxacts = MaxBackends;
+	else
+		max_tm_gxacts = 0;
 
 	if ((Gp_role != GP_ROLE_DISPATCH) && (Gp_role != GP_ROLE_UTILITY))
 		return;

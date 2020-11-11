@@ -595,11 +595,12 @@ XactLockTableWait(TransactionId xid, Relation rel, ItemPointer ctid,
 	bool		first = true;
 
 	/*
-	 * Concurrent update and delete will wait on segment when GDD is enabled,
-	 * need to report the waited transactions to QD to make sure the they have
-	 * the same transaction order on the master.
+	 * Concurrent update and delete will wait on segment when GDD is enabled (or
+	 * the corner case that utility mode delete|update in segment which does not
+	 * hold gxid), need to report the waited transactions to QD to make sure the
+	 * they have the same transaction order on the master.
 	 */
-	if (gp_enable_global_deadlock_detector && Gp_role == GP_ROLE_EXECUTE)
+	if (Gp_role == GP_ROLE_EXECUTE)
 	{
 		MemoryContext oldContext;
 		DistributedTransactionId gxid = LocalXidGetDistributedXid(xid);
@@ -1142,7 +1143,7 @@ LockTagIsTemp(const LOCKTAG *tag)
  * we have to keep upgrading locks for AO table.
  */
 bool
-CondUpgradeRelLock(Oid relid, bool noWait)
+CondUpgradeRelLock(Oid relid)
 {
 	Relation rel;
 	bool upgrade = false;
@@ -1150,10 +1151,10 @@ CondUpgradeRelLock(Oid relid, bool noWait)
 	if (!gp_enable_global_deadlock_detector)
 		return true;
 
-	rel = try_relation_open(relid, NoLock, noWait);
+	rel = try_relation_open(relid, NoLock, false);
 
 	if (!rel)
-		elog(ERROR, "Relation open failed!");
+		return false;
 	else if (RelationIsAppendOptimized(rel))
 		upgrade = true;
 	else

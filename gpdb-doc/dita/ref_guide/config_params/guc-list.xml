@@ -146,6 +146,8 @@
             <li>
               <xref href="#from_collapse_limit"/>
             </li>
+            <li><xref href="#gp_add_column_inherits_table_setting"/>
+            </li>
             <li>
               <xref href="#gp_adjust_selectivity_for_outerjoins"/>
             </li>
@@ -260,6 +262,9 @@
             </li>
             <li>
               <xref href="#gp_fts_probe_timeout"/>
+            </li>
+            <li>
+              <xref href="#gp_fts_replication_attempt_count"/>
             </li>
             <li>
               <xref href="#gp_global_deadlock_detector_period"/>
@@ -384,6 +389,8 @@
             <li>
               <xref href="#max_resource_queues"/>
             </li>
+            <li>
+              <xref href="#max_slot_wal_keep_size"/></li>
             <li>
               <xref href="#max_stack_depth"/>
             </li>
@@ -585,6 +592,12 @@
             </li>
             <li>
               <xref href="#track_activity_query_size"/>
+            </li>
+            <li>
+              <xref href="#track_activities"/>
+            </li>
+            <li>
+              <xref href="#track_counts"/>
             </li>
             <li>
               <xref href="#transaction_isolation"/>
@@ -2030,6 +2043,57 @@
       </table>
     </body>
   </topic>
+  <topic id="gp_add_column_inherits_table_setting">
+    <title>gp_add_column_inherits_table_setting</title>
+    <body>
+      <p>When adding a column to an append-optimized, column-oriented table with the <codeph><xref
+            href="../sql_commands/ALTER_TABLE.xml">ALTER TABLE</xref></codeph> command, this
+        parameter controls whether the table's data compression parameters for a column
+          (<codeph>compresstype</codeph>, <codeph>compresslevel</codeph>, and
+          <codeph>blocksize</codeph>) can be inherited from the table values. The default is
+          <codeph>off</codeph>, the table's data compression settings are not considered when adding
+        a column to the table. If the value is <codeph>on</codeph>, the table's settings are
+        considered. </p>
+      <p>When you create an append-optimized column-oriented table, you can set the table's data
+        compression parameters <codeph>compresstype</codeph>, <codeph>compresslevel</codeph>, and
+          <codeph>blocksize</codeph> for the table in the <codeph>WITH</codeph> clause. When you add
+        a column, Greenplum Database sets each data compression parameter based on one of the
+        following settings, in order of preference.<ol id="ol_hqk_l4w_kmb">
+          <li>The data compression setting specified in the <codeph>ALTER TABLE</codeph> command
+              <codeph>ENCODING</codeph> clause.</li>
+          <li>If this server configuration parameter is set to <codeph>on</codeph>, the table's data
+            compression setting specified in the <codeph>WITH</codeph> clause when the table was
+            created. Otherwise, the table's data compression setting is ignored.</li>
+          <li>The data compression setting specified in the server configuration parameter
+                <codeph><xref href="#gp_default_storage_options"
+              >gp_default_storage_options</xref></codeph>.</li>
+          <li> The default data compression setting.</li>
+        </ol></p>
+      <p>For information about the data storage compression parameters, see <codeph><xref
+            href="../sql_commands/CREATE_TABLE.xml">CREATE TABLE</xref></codeph>.</p>
+      <table id="table_nyn_wjd_lmb">
+        <tgroup cols="3">
+          <colspec colnum="1" colname="col1" colwidth="1*"/>
+          <colspec colnum="2" colname="col2" colwidth="1*"/>
+          <colspec colnum="3" colname="col3" colwidth="1*"/>
+          <thead>
+            <row>
+              <entry colname="col1">Value Range</entry>
+              <entry colname="col2">Default</entry>
+              <entry colname="col3">Set Classifications</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry colname="col1">Boolean</entry>
+              <entry colname="col2">off</entry>
+              <entry colname="col3">master<p>session</p><p>reload</p></entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+    </body>
+  </topic>
   <topic id="gp_adjust_selectivity_for_outerjoins">
     <title>gp_adjust_selectivity_for_outerjoins</title>
     <body>
@@ -3365,6 +3429,36 @@
       </table>
     </body>
   </topic>
+  <topic id="gp_fts_replication_attempt_count">
+    <title>gp_fts_replication_attempt_count</title>
+    <body>
+      <p>Specifies the maximum number of times that Greenplum Database attempts
+        to establish a primary-mirror replication connection. When this count
+        is exceeded, the fault detection process (<codeph>ftsprobe</codeph>)
+        stops retrying and marks the mirror down.</p>
+      <table id="gp_fts_replication_attempt_count_tbl">
+        <tgroup cols="3">
+          <colspec colnum="1" colname="col1" colwidth="1*"/>
+          <colspec colnum="2" colname="col2" colwidth="1*"/>
+          <colspec colnum="3" colname="col3" colwidth="1*"/>
+          <thead>
+            <row>
+              <entry colname="col1">Value Range</entry>
+              <entry colname="col2">Default</entry>
+              <entry colname="col3">Set Classifications</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry colname="col1">0 - 100</entry>
+              <entry colname="col2">10</entry>
+              <entry colname="col3">master<p>system</p><p>reload</p></entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+    </body>
+  </topic>
   <topic id="gp_global_deadlock_detector_period">
     <title>gp_global_deadlock_detector_period</title>
     <body>
@@ -3759,6 +3853,65 @@
       </table>
     </body>
   </topic>
+  <topic id="gp_interconnect_proxy_addresses">
+    <title>gp_interconnect_proxy_addresses</title>
+    <body>
+      <p>Sets the proxy ports that Greenplum Database uses when the server configuration parameter
+            <codeph><xref href="#gp_interconnect_type" format="dita"/></codeph> is set to
+          <codeph>proxy</codeph>. Otherwise, this parameter is ignored. The default value is an
+        empty string (""). </p>
+      <p>When the <codeph>gp_interconnect_type</codeph> parameter is set to <codeph>proxy</codeph>,
+        You must specify a proxy port for the master, standby master, and all primary and mirror
+        segment instances in this format:</p>
+      <codeblock>&lt;db_id>:&lt;cont_id>:&lt;seg_ip>:&lt;port>[,&lt;dbid>:&lt;segid>:&lt;ip>:&lt;port> ... ]</codeblock>
+      <p>For the master, standby master, and segment instance, the first three fields,
+          <varname>db_id</varname>, <varname>cont_id</varname>, and <varname>seg_ip</varname> can be
+        found in the <codeph><xref href="../system_catalogs/gp_segment_configuration.xml"
+            >gp_segment_configuration</xref></codeph> catalog table. The fourth field,
+          <varname>port</varname>, is the proxy port for the Greenplum master or a segment
+          instance.<ul id="ul_zly_vpm_4mb">
+          <li><varname>db_id</varname> is the <codeph>dbid</codeph> column in the catalog
+            table.</li>
+          <li><varname>cont_id</varname> is the <codeph>content</codeph> column in the catalog
+            table.</li>
+          <li><varname>seg_ip</varname> is the IP address corresponding to <codeph>address</codeph>
+            column in the catalog table. If the <codeph>address</codeph> is a hostname, use the IP
+            address of the hostname.</li>
+          <li><varname>port</varname> is the TCP/IP port for the segment instance proxy that you
+            specify.</li>
+        </ul></p>
+      <note type="important">The <varname>seg_ip</varname> must be an IP address, not a hostname.
+        Also, If the mapping of a segment instance hostname to the IP address changes, you must
+        update the IP address in the parameter value.</note>
+      <p>You must specify the value as a single-quoted string. This <codeph>gpconfig</codeph>
+        command sets the value for <codeph>gp_interconnect_proxy_addresses</codeph> as a
+        single-quoted string. The Greenplum system consists of a master and a single segment
+        instance.<codeblock>gpconfig --skipvalidation -c gp_interconnect_proxy_addresses -v "'1:-1:192.168.180.50:35432,2:0:192.168.180.54:35000'"</codeblock></p>
+      <p>For an example of setting <codeph>gp_interconnect_proxy_addresses</codeph>, see <xref
+          href="../../admin_guide/managing/proxy-ic.xml"/>.</p>
+      <table id="table_dlg_dch_mmb">
+        <tgroup cols="3">
+          <colspec colnum="1" colname="col1" colwidth="1*"/>
+          <colspec colnum="2" colname="col2" colwidth="1*"/>
+          <colspec colnum="3" colname="col3" colwidth="1*"/>
+          <thead>
+            <row>
+              <entry colname="col1">Value Range</entry>
+              <entry colname="col2">Default</entry>
+              <entry colname="col3">Set Classifications</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry colname="col1">string (maximum length - 16384 bytes)</entry>
+              <entry colname="col2"/>
+              <entry colname="col3">local<p>system</p><p>restart</p></entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+    </body>
+  </topic>
   <topic id="gp_interconnect_queue_depth">
     <title>gp_interconnect_queue_depth</title>
     <body>
@@ -3863,6 +4016,14 @@
       <p>With TCP as the interconnect protocol, Greenplum Database has an upper limit of 1000
         segment instances - less than that if the query workload involves complex, multi-slice
         queries.</p>
+      <p>The <codeph>PROXY</codeph> value specifies using the TCP protocol, and when running
+        queries, using a proxy for Greenplum interconnect communication between the master instance
+        and segment instances and between two segment instances. When this parameter is set to
+          <codeph>PROXY</codeph>, you must specify the proxy ports for the master and segment
+        instances with the server configuration parameter <codeph><xref
+            href="#gp_interconnect_proxy_addresses" format="dita"/></codeph>. For information about
+        configuring and using proxies with the Greenplum interconnect, see <xref
+          href="../../admin_guide/managing/proxy-ic.xml"/>.</p>
       <table id="table_jn5_frn_xv">
         <tgroup cols="3">
           <colspec colnum="1" colname="col1" colwidth="1*"/>
@@ -3877,7 +4038,7 @@
           </thead>
           <tbody>
             <row>
-              <entry colname="col1">UDPIFC<p>TCP</p></entry>
+              <entry colname="col1">UDPIFC<p>TCP</p><p>PROXY</p></entry>
               <entry colname="col2">UDPIFC</entry>
               <entry colname="col3">local<p>system</p><p>restart</p></entry>
             </row>
@@ -4326,6 +4487,38 @@
         </p>
         <p>which is above the percentage configured in the
             <codeph>gp_resource_group_memory_limit</codeph> setting.</p></note>
+    </body>
+  </topic>
+  <topic id="gp_resource_group_queuing_timeout">
+    <title>gp_resource_group_queuing_timeout</title>
+    <body>
+      <note>The <codeph>gp_resource_group_queuing_timeout</codeph> server configuration parameter
+        is enforced only when resource group-based resource management is active.</note>
+      <p>Cancel a transaction queued in a resource group that waits longer than the
+        specified number of milliseconds. The time limit applies separately to each
+        transaction. The default value is zero; transactions are queued indefinitely
+        and never time out.</p>
+      <table id="gp_resource_group_queuing_timeout_table">
+        <tgroup cols="3">
+          <colspec colnum="1" colname="col1" colwidth="1*"/>
+          <colspec colnum="2" colname="col2" colwidth="1*"/>
+          <colspec colnum="3" colname="col3" colwidth="1*"/>
+          <thead>
+            <row>
+              <entry colname="col1">Value Range</entry>
+              <entry colname="col2">Default</entry>
+              <entry colname="col3">Set Classifications</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry colname="col1">0 - <codeph>INT_MAX</codeph> millisecs</entry>
+              <entry colname="col2">0 millisecs</entry>
+              <entry colname="col3">master<p>system</p><p>session</p><p>reload</p></entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
     </body>
   </topic>
   <topic id="gp_resource_manager">
@@ -5548,8 +5741,8 @@
         milliseconds while attempting to acquire a lock on a table, index,
         row, or other database object. The time limit applies separately to
         each lock acquisition attempt. The limit applies both to explicit
-        locking requests (such as <codeph>LOCK TABLE</codeph>, or
-        <codeph>SELECT FOR UPDATE</codeph> without <codeph>NOWAIT</codeph>)
+        locking requests (such as <codeph>LOCK TABLE</codeph> or
+        <codeph>SELECT FOR UPDATE</codeph>)
         and to implicitly-acquired locks. If <codeph>log_min_error_statement</codeph>
         is set to <codeph>ERROR</codeph> or lower, Greenplum Database logs the
         statement that timed out. A value of zero (the default) turns off this 
@@ -6282,7 +6475,7 @@
           </thead>
           <tbody>
             <row>
-              <entry colname="col1">10-<i>n</i></entry>
+              <entry colname="col1">10 - 8388607</entry>
               <entry colname="col2">250 on master<p>750 on segments</p></entry>
               <entry colname="col3">local<p>system</p><p>restart</p></entry>
             </row>
@@ -6521,6 +6714,40 @@
               <entry colname="col1">integer</entry>
               <entry colname="col2">9</entry>
               <entry colname="col3">master<p>system</p><p>restart</p></entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+    </body>
+  </topic>
+  <topic id="max_slot_wal_keep_size">
+    <title>max_slot_wal_keep_size</title>
+    <body>
+      <p>Sets the maximum size in megabytes of Write-Ahead Logging (WAL) files on disk per segment
+        instance that can be reserved when Greenplum streams data to the mirror segment instance or
+        standby master to keep it synchronized with the corresponding primary segment instance or
+        master. The default is -1, Greenplum can retain an unlimited amount of WAL files on
+        disk.</p>
+      <p>If the file size exceeds the maximum size, the files are released and are available for
+        deletion. A mirror or standby may no longer be able to continue replication due to removal
+        of required WAL files.</p>
+      <table id="table_dwl_5vt_4mb">
+        <tgroup cols="3">
+          <colspec colnum="1" colname="col1" colwidth="1*"/>
+          <colspec colnum="2" colname="col2" colwidth="1*"/>
+          <colspec colnum="3" colname="col3" colwidth="1*"/>
+          <thead>
+            <row>
+              <entry colname="col1">Value Range</entry>
+              <entry colname="col2">Default</entry>
+              <entry colname="col3">Set Classifications</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry colname="col1">Integer</entry>
+              <entry colname="col2">-1</entry>
+              <entry colname="col3">local<p>system</p><p>restart</p></entry>
             </row>
           </tbody>
         </tgroup>
@@ -8323,6 +8550,8 @@
         is pgsql, perl, tcl, or python. By preloading a shared library, the library startup time is
         avoided when the library is first used. If a specified library is not found, the server will
         fail to start.</p>
+      <note>When you add a library to <codeph>shared_preload_libraries</codeph>, be sure to
+        retain any previous setting of the parameter.</note>
       <table id="shared_preload_libraries_table">
         <tgroup cols="3">
           <colspec colnum="1" colname="col1" colwidth="1*"/>
@@ -8376,8 +8605,16 @@
   <topic id="ssl_ciphers">
     <title>ssl_ciphers</title>
     <body>
-      <p>Specifies a list of SSL ciphers that are allowed to be used on secure connections. See the
-        openssl manual page for a list of supported ciphers. </p>
+      <p>Specifies a list of SSL ciphers that are allowed to be used on secure connections.
+          <codeph>ssl_ciphers</codeph>
+        <i>overrides</i> any ciphers string specified in <codeph>/etc/openssl.cnf</codeph>. The
+        default value <codeph>ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH</codeph> enables all ciphers except
+        for ADH, LOW, EXP, and MD5 ciphers, and prioritizes ciphers by their strength. </p>
+      <note>With TLS 1.2 some ciphers in MEDIUM and HIGH strength still use NULL encryption (no
+        encryption for transport), which the default <codeph>ssl_ciphers</codeph> string allows. To
+        bypass NULL ciphers with TLS 1.2 use a string such as
+        <codeph>TLSv1.2:!eNULL:!aNULL</codeph>.</note>
+      <p>See the openssl manual page for a list of supported ciphers.</p>
       <table id="ssl_ciphers_table">
         <tgroup cols="3">
           <colspec colnum="1" colname="col1" colwidth="1*"/>
@@ -8393,7 +8630,7 @@
           <tbody>
             <row>
               <entry colname="col1">string</entry>
-              <entry colname="col2">ALL</entry>
+              <entry colname="col2">ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH</entry>
               <entry colname="col3">master<p>system</p><p>restart</p></entry>
             </row>
           </tbody>
@@ -8827,6 +9064,39 @@ statement_mem = rg_perseg_mem / max_expected_concurrent_queries</codeblock></li>
       </table>
     </body>
   </topic>
+  <topic id="track_activities">
+    <title>track_activities</title>
+    <body>
+      <p>Enables the collection of information on the currently executing command of each session,
+        along with the time when that command began execution. The default value is
+          <codeph>true</codeph>. Only superusers can change this setting. See the <codeph><xref
+            href="../system_catalogs/pg_stat_activity.xml">pg_stat_activity</xref></codeph>
+        view.</p>
+      <note>Even when enabled, this information is not visible to all users, only to superusers and
+        the user owning the session being reported on, so it should not represent a security risk. </note>
+      <table id="table_f1l_fwm_vlb">
+        <tgroup cols="3">
+          <colspec colnum="1" colname="col1" colwidth="1*"/>
+          <colspec colnum="2" colname="col2" colwidth="1*"/>
+          <colspec colnum="3" colname="col3" colwidth="1*"/>
+          <thead>
+            <row>
+              <entry colname="col1">Value Range</entry>
+              <entry colname="col2">Default</entry>
+              <entry colname="col3">Set Classifications</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry colname="col1">Boolean</entry>
+              <entry colname="col2">true</entry>
+              <entry colname="col3">master<p>system</p><p>reload</p><p>superuser</p></entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+    </body>
+  </topic>
   <topic id="track_activity_query_size">
     <title>track_activity_query_size</title>
     <body>
@@ -8849,6 +9119,34 @@ statement_mem = rg_perseg_mem / max_expected_concurrent_queries</codeblock></li>
               <entry colname="col1">integer</entry>
               <entry colname="col2">1024</entry>
               <entry colname="col3">local<p>system</p><p>restart</p></entry>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+    </body>
+  </topic>
+  <topic id="track_counts">
+    <title>track_counts</title>
+    <body>
+      <p>Enables the collection of information on the currently executing command of each session,
+        along with the time at which that command began execution.</p>
+      <table id="table_e5c_fwm_vlb">
+        <tgroup cols="3">
+          <colspec colnum="1" colname="col1" colwidth="1*"/>
+          <colspec colnum="2" colname="col2" colwidth="1*"/>
+          <colspec colnum="3" colname="col3" colwidth="1*"/>
+          <thead>
+            <row>
+              <entry colname="col1">Value Range</entry>
+              <entry colname="col2">Default</entry>
+              <entry colname="col3">Set Classifications</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry colname="col1">Boolean</entry>
+              <entry colname="col2">true</entry>
+              <entry colname="col3">master<p>session</p><p>reload</p><p>superuser</p></entry>
             </row>
           </tbody>
         </tgroup>
@@ -8939,10 +9237,13 @@ statement_mem = rg_perseg_mem / max_expected_concurrent_queries</codeblock></li>
     </body>
   </topic>
   <topic id="unix_socket_directory">
-    <title>unix_socket_directory</title>
+    <title>unix_socket_directories</title>
     <body>
       <p>Specifies the directory of the UNIX-domain socket on which the server is to listen for
-        connections from client applications.</p>
+        connections from client applications. Multiple sockets can be created by listing multiple
+        directories separated by commas. </p>
+      <note type="important">Do not change the value of this parameter. The default location is
+        required for Greenplum Database utilities.</note>
       <table id="unix_socket_directory_table">
         <tgroup cols="3">
           <colspec colnum="1" colname="col1" colwidth="1*"/>
@@ -9381,7 +9682,7 @@ statement_mem = rg_perseg_mem / max_expected_concurrent_queries</codeblock></li>
         files that are saved by the by the active Greenplum Database master if a checkpoint
         operation occurs.</p>
       <p>The segment files are used to synchronize the active master on the standby master. </p>
-      <table id="keep_wal_segments_table">
+      <table id="wal_keep_segments_table">
         <tgroup cols="3">
           <colspec colnum="1" colname="col1" colwidth="1*"/>
           <colspec colnum="2" colname="col2" colwidth="1*"/>

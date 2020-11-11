@@ -194,8 +194,14 @@ namespace gpdb {
 	// does a function exist with the given oid
 	bool FunctionExists(Oid oid);
 
+	// is the given function an allowed lossy cast for PS
+	bool IsFuncAllowedForPartitionSelection(Oid funcid);
+
 	// is the given function strict
 	bool FuncStrict(Oid funcid);
+
+	// does this preserve the NDVs of its inputs?
+	bool IsFuncNDVPreserving(Oid funcid);
 
 	// stability property of given function
 	char FuncStability(Oid funcid);
@@ -331,6 +337,9 @@ namespace gpdb {
 
 	// get the column-definition hash opclass for type
 	Oid GetColumnDefOpclassForType(List *opclassName, Oid typid);
+
+	// get the default hash opfamily for type
+	Oid GetDefaultDistributionOpfamilyForType(Oid typid);
 
 	// get the hash function in an opfamily for given datatype
 	Oid GetHashProcInOpfamily(Oid opfamily, Oid typid);
@@ -473,6 +482,9 @@ namespace gpdb {
 	// is the given operator strict
 	bool IsOpStrict(Oid opno);
 
+	// does it preserve the NDVs of its inputs
+	bool IsOpNDVPreserving(Oid opno);
+
 	// get input types for a given operator
 	void GetOpInputTypes(Oid opno, Oid *lefttype, Oid *righttype);
 
@@ -485,7 +497,7 @@ namespace gpdb {
 	// query or expression tree walker
 	bool WalkQueryOrExpressionTree(Node *node, bool(*walker)(), void *context, int flags);
 
-	// modify a query tree
+	// modify the components of a Query tree
 	Query *MutateQueryTree(Query *query, Node *(*mutator)(), void *context, int flags);
 
 	// modify an expression tree
@@ -493,9 +505,6 @@ namespace gpdb {
 
 	// modify a query or an expression tree
 	Node *MutateQueryOrExpressionTree(Node *node, Node *(*mutator)(), void *context, int flags);
-
-	// the part of MutateQueryTree that processes a query's rangetable
-	List *MutateRangeTable(List *rtable, Node *(*mutator)(), void *context, int flags);
 
 	// check whether the part with the given oid is the root of a partition table
 	bool RelPartIsRoot(Oid relid);
@@ -619,6 +628,12 @@ namespace gpdb {
 	
 	// get oids of families this operator belongs to
 	List *GetOpFamiliesForScOp(Oid opno);
+
+	// get the OID of hash equality operator(s) compatible with the given op
+	Oid GetCompatibleHashOpFamily(Oid opno);
+
+	// get the OID of legacy hash equality operator(s) compatible with the given op
+	Oid GetCompatibleLegacyHashOpFamily(Oid opno);
 	
 	// get oids of op classes for the index keys
 	List *GetIndexOpFamilies(Oid index_oid);

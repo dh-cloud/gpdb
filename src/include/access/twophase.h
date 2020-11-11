@@ -79,6 +79,8 @@ extern bool StandbyTransactionIdIsPrepared(TransactionId xid);
 
 extern TransactionId PrescanPreparedTransactions(TransactionId **xids_p,
 							int *nxids_p);
+extern void SetOldestPreparedTransaction(void);
+extern XLogRecPtr GetOldestPreparedTransaction(void);
 extern void StandbyRecoverPreparedTransactions(bool overwriteOK);
 extern void RecoverPreparedTransactions(void);
 
@@ -94,7 +96,7 @@ extern void TwoPhaseAddPreparedTransactionInit(
 					      , int                             *maxCount);
 
 struct XLogRecData;
-extern XLogRecPtr *getTwoPhaseOldestPreparedTransactionXLogRecPtr(struct XLogRecData *rdata);
+extern XLogRecPtr *getTwoPhaseOldestPreparedTransactionXLogRecPtr(prepared_transaction_agg_state *ptas);
 
 extern void TwoPhaseAddPreparedTransaction(
                  prepared_transaction_agg_state **ptas

@@ -308,6 +308,16 @@ select (select a from orca_w3 where a = orca_w1.a) as one from orca_w1 where orc
 -- window function in subquery inside target list with outer ref in partition clause
 select (select rank() over(partition by orca_w2.a) from orca_w3 where a = orca_w1.a) as one, row_number() over(partition by orca_w1.a) as two from orca_w1, orca_w2 order by orca_w1.a;
 
+-- correlated subquery in target list
+select (select a+1 from (select a from orca_w2 where orca_w1.a=orca_w2.a) sq(a)) as one, row_number() over(partition by orca_w1.a) as two from orca_w1;
+
+-- correlated subquery in target list, mismatching varattnos
+select (select a+1 from (select a from orca_w2 where sq2.a=orca_w2.a) sq1(a)) as one, row_number() over(partition by sq2.a) as two from (select 1,1,1,a from orca_w1) sq2(x,y,z,a);
+
+-- cte in scalar subquery
+with x as (select a, b from orca_w1)
+select (select count(*) from x) as one, rank() over(partition by a) as rank_within_parent from x order by a desc;
+
 -- window function in subquery inside target list with outer ref in order clause
 select (select rank() over(order by orca_w2.a) from orca_w3 where a = orca_w1.a) as one, row_number() over(partition by orca_w1.a) as two from orca_w1, orca_w2 order by orca_w1.a;
 
@@ -833,7 +843,8 @@ CTE1(e,f) AS
 ( SELECT f1.a, rank() OVER (PARTITION BY f1.b ORDER BY CTE.a) FROM orca.twf1 f1, CTE )
 SELECT * FROM CTE1,CTE WHERE CTE.a = CTE1.f and CTE.a = 2 ORDER BY 1;
 
-SET optimizer_cte_inlining = off;
+RESET optimizer_cte_inlining;
+RESET optimizer_cte_inlining_bound;
 
 -- catalog queries
 select 1 from pg_class c group by c.oid limit 1;
@@ -1768,7 +1779,6 @@ drop table idxscan_outer;
 drop table idxscan_inner;
 
 drop table if exists ggg;
-set optimizer_metadata_caching=on;
 
 create table ggg (a char(1), b char(2), d char(3));
 insert into ggg values ('x', 'a', 'c');
@@ -2289,7 +2299,6 @@ CREATE TABLE tc4 (a int, b int, check(a + b > 1 and a = b));
 INSERT INTO tc4 VALUES(NULL, NULL);
 SELECT * from tc4 where a IS NULL;
 
--- citext fallback
 CREATE EXTENSION IF NOT EXISTS citext;
 drop table if exists tt, tc;
 create table tc (a int, c citext) distributed by (a);
@@ -2301,7 +2310,6 @@ insert into tt values (1, 'a'), (1, 'A');
 insert into tc values (1, 'b'), (1, 'B');
 insert into tt values (1, 'b'), (1, 'B');
 
--- expected fall back to the planner
 select * from tc, tt where c = v;
 
 -- test gpexpand phase 1
@@ -2368,6 +2376,169 @@ analyze part2_1_prt_2;
 -- the plan should contain a 2 stage limit. If we incorrectly estimate that the
 -- relation is empty, we would end up choosing a single stage limit. 
 explain select * from part1, part2 where part1.b = part2.b limit 5;
+
+-- test opfamily handling in ORCA
+-- start_ignore
+DROP FUNCTION abseq(int, int) CASCADE;
+DROP FUNCTION abslt(int, int) CASCADE;
+DROP FUNCTION absgt(int, int) CASCADE;
+DROP FUNCTION abscmp(int, int) CASCADE;
+-- end_ignore
+CREATE FUNCTION abseq(int, int) RETURNS BOOL AS
+$$
+  begin return abs($1) = abs($2); end;
+$$ LANGUAGE plpgsql STRICT IMMUTABLE;
+
+CREATE OPERATOR |=| (
+  PROCEDURE = abseq,
+  LEFTARG = int,
+  RIGHTARG = int,
+  COMMUTATOR = |=|,
+  hashes, merges);
+
+CREATE FUNCTION abshashfunc(int) RETURNS int AS
+$$
+  begin return hashint4(abs($1)); end;
+$$ LANGUAGE plpgsql STRICT IMMUTABLE;
+
+CREATE FUNCTION abslt(int, int) RETURNS BOOL AS
+$$
+  begin return abs($1) < abs($2); end;
+$$ LANGUAGE plpgsql STRICT IMMUTABLE;
+
+CREATE OPERATOR |<| (
+  PROCEDURE = abslt,
+  LEFTARG = int,
+  RIGHTARG = int);
+
+CREATE FUNCTION absgt(int, int) RETURNS BOOL AS
+$$
+  begin return abs($1) > abs($2); end;
+$$ LANGUAGE plpgsql STRICT IMMUTABLE;
+
+CREATE OPERATOR |>| (
+  PROCEDURE = absgt,
+  LEFTARG = int,
+  RIGHTARG = int);
+
+CREATE FUNCTION abscmp(int, int) RETURNS int AS
+$$
+  begin return btint4cmp(abs($1),abs($2)); end;
+$$ LANGUAGE plpgsql STRICT IMMUTABLE;
+
+DROP TABLE IF EXISTS atab_old_hash;
+DROP TABLE IF EXISTS btab_old_hash;
+CREATE TABLE atab_old_hash (a int) DISTRIBUTED BY (a);
+CREATE TABLE btab_old_hash (b int) DISTRIBUTED BY (b);
+
+INSERT INTO atab_old_hash VALUES (-1), (0), (1);
+INSERT INTO btab_old_hash VALUES (-1), (0), (1), (2);
+
+-- Test simple join using the new operator(s) before creating the opclass/opfamily
+EXPLAIN SELECT a, b FROM atab_old_hash INNER JOIN btab_old_hash ON a |=| b;
+SELECT a, b FROM atab_old_hash INNER JOIN btab_old_hash ON a |=| b;
+
+CREATE OPERATOR CLASS abs_int_hash_ops FOR TYPE int4
+  USING hash AS
+  OPERATOR 1 |=|,
+  FUNCTION 1 abshashfunc(int);
+
+CREATE OPERATOR CLASS abs_int_btree_ops FOR TYPE int4
+  USING btree AS
+  OPERATOR 1 |<|,
+  OPERATOR 3 |=|,
+  OPERATOR 5 |>|,
+  FUNCTION 1 abscmp(int, int);
+
+-- OK test different kinds of joins
+EXPLAIN SELECT a, b FROM atab_old_hash INNER JOIN btab_old_hash ON a |=| b;
+SELECT a, b FROM atab_old_hash INNER JOIN btab_old_hash ON a |=| b;
+
+EXPLAIN SELECT a, b FROM btab_old_hash LEFT OUTER JOIN atab_old_hash ON a |=| b;
+SELECT a, b FROM btab_old_hash LEFT OUTER JOIN atab_old_hash ON a |=| b;
+
+set optimizer_expand_fulljoin = on;
+EXPLAIN SELECT a, b FROM atab_old_hash FULL JOIN btab_old_hash ON a |=| b;
+SELECT a, b FROM atab_old_hash FULL JOIN btab_old_hash ON a |=| b;
+reset optimizer_expand_fulljoin;
+
+-- Test rescanned materialize that is not directly above a motion
+
+DROP TABLE IF EXISTS foo1 CASCADE;
+DROP TABLE IF EXISTS foo2 CASCADE;
+DROP TABLE IF EXISTS foo3 CASCADE;
+CREATE table foo1(a int);
+CREATE table foo2(a int, b int, c int);
+CREATE table foo3(a int, b int);
+CREATE index f2c on foo2 using bitmap(c);
+INSERT INTO foo1 values (1), (2);
+INSERT INTO foo2 values (1,1,1), (2,2,2);
+INSERT INTO foo3 values (1,1), (2,2);
+
+set optimizer_join_order=query;
+-- we ignore enable/disable_xform statements as their output will differ if the server is compiled without Orca (the xform won't exist)
+-- start_ignore
+select disable_xform('CXformInnerJoin2HashJoin');
+-- end_ignore
+
+EXPLAIN SELECT 1 FROM foo1, foo2 WHERE foo1.a = foo2.a AND foo2.c = 3 AND foo2.b IN (SELECT b FROM foo3);
+SELECT 1 FROM foo1, foo2 WHERE foo1.a = foo2.a AND foo2.c = 3 AND foo2.b IN (SELECT b FROM foo3);
+
+reset optimizer_join_order;
+-- start_ignore
+select enable_xform('CXformInnerJoin2HashJoin');
+-- end_ignore
+-- Test that duplicate sensitive redistributes don't have invalid projection (eg: element that can't be hashed)
+drop table if exists t55;
+drop table if exists tp;
+
+create table t55 (c int, lid int);
+insert into t55 select i, i from generate_series(1, 1000) i;
+
+set optimizer_join_order = query;
+
+explain verbose
+CREATE TABLE TP AS
+WITH META AS (SELECT '2020-01-01' AS VALID_DT, '99' AS LOAD_ID)
+SELECT DISTINCT L1.c, L1.lid
+FROM t55 L1 CROSS JOIN META
+WHERE L1.lid = META.LOAD_ID;
+
+CREATE TABLE TP AS
+WITH META AS (SELECT '2020-01-01' AS VALID_DT, '99' AS LOAD_ID)
+SELECT DISTINCT L1.c, L1.lid
+FROM t55 L1 CROSS JOIN META
+WHERE L1.lid = META.LOAD_ID;
+
+reset optimizer_join_order;
+SELECT * from tp;
+
+-- Test partition selection for lossy casts
+create table lossycastrangepart(a float, b float) partition by range(b) (start(0) end(40) every(10));
+insert into lossycastrangepart (values (5.1,5.1), (9.9,9.9), (10.1,10.1), (9.1,9.1), (10.9,10.9), (11.1,11.1), (21.0,21.0)); 
+explain select * from lossycastrangepart where b::int = 10;
+select * from lossycastrangepart where b::int = 10;
+explain select * from lossycastrangepart where b::int = 11;
+select * from lossycastrangepart where b::int = 11;
+explain select * from lossycastrangepart where b::int < 10;
+select * from lossycastrangepart where b::int < 10;
+explain select * from lossycastrangepart where b::int < 11;
+select * from lossycastrangepart where b::int < 11;
+
+create table lossycastlistpart( a int, b float) partition by list(b) (partition l1 values(1.7, 2.1), partition l2 values(1.3, 2.7), partition l3 values(1.8, 2.8));
+insert into lossycastlistpart (values (1.0,2.1), (1.0,1.3), (10.1,2.1), (9.1,2.7), (10.9,1.8), (11.1,2.8), (21.0,1.7));
+explain select * from lossycastlistpart where b::int < 2;
+select * from lossycastlistpart where b::int < 2;
+explain select * from lossycastlistpart where b::int = 2;
+select * from lossycastlistpart where b::int = 2;
+
+--Test lossy casted NEQ on range partitioned table
+drop table if exists sales;
+create table sales(id int, prod_id int, cust_id int, sales_ts timestamp)
+partition by range(sales_ts) (start (timestamp '2010-01-01 00:00:00') end(timestamp '2010-02-02 23:59:59')
+every (interval '1 day'));
+insert into sales select i, i%100, i%1000, timestamp '2010-01-01 00:00:00' + i * interval '1 day' from generate_series(1,20) i;
+select * from sales where sales_ts::date != '2010-01-05' order by sales_ts;
 
 -- start_ignore
 DROP SCHEMA orca CASCADE;

@@ -2,6 +2,8 @@ platform: linux
 inputs:
  - name: ccp_src
  - name: cluster_env_files
+caches:
+ - path: pip-cache-dir
 run:
   path: bash
   args:
@@ -10,6 +12,23 @@ run:
     set -ex
 
     ccp_src/scripts/setup_ssh_to_cluster.sh
+
+    # TODO: ask CCP maintainers for a feature to do this for us
+    scp cluster_env_files/hostfile_all mdw:/tmp
+
+    # Install patchelf. We need to SSH as root, hence the use of
+    # cluster_env_files.
+    ssh -t ccp-$(cat cluster_env_files/terraform/name)-0 "sudo bash -c '
+        source /home/gpadmin/gpdb_src/concourse/scripts/common.bash
+        install_python_hacks
+    '"
+
+    # ensure cluster is stopped
+    ssh -n mdw "
+        source /usr/local/greenplum-db-devel/greenplum_path.sh
+        export MASTER_DATA_DIRECTORY='/data/gpdata/master/gpseg-1'
+        if [ -d \$MASTER_DATA_DIRECTORY ]; then gpstop -a; fi
+    "
 
     # setting sysctl settings
     while read LINE; do
@@ -52,15 +71,16 @@ run:
         '"
     done <cluster_env_files/etc_hostfile
 
-    # TODO: ask CCP maintainers for a feature to do this for us
-    scp cluster_env_files/hostfile_all mdw:/tmp
+    # start cluster back up
+    ssh -n mdw "
+        source /usr/local/greenplum-db-devel/greenplum_path.sh
+        export MASTER_DATA_DIRECTORY='/data/gpdata/master/gpseg-1'
+        if [ -d \$MASTER_DATA_DIRECTORY ]; then gpstart -a; fi
+    "
 
-    # Install patchelf. We need to SSH as root, hence the use of
-    # cluster_env_files.
-    ssh -t ccp-$(cat cluster_env_files/terraform/name)-0 "sudo bash -c '
-        source /home/gpadmin/gpdb_src/concourse/scripts/common.bash
-        install_python_hacks
-    '"
+    while read -r host; do
+        scp -qr "pip-cache-dir" $host:pip-cache-dir
+    done < cluster_env_files/hostfile_all
 
     ssh -t mdw "
         source /home/gpadmin/gpdb_src/concourse/scripts/common.bash
@@ -68,3 +88,9 @@ run:
 
         $CUSTOM_ENV bash /home/gpadmin/gpdb_src/concourse/scripts/run_behave_test.sh \"$BEHAVE_FLAGS\"
     "
+
+    # Refresh the Concourse container cache with the updated contents
+    # from the CCP mdw node.
+
+    rm -rf "pip-cache-dir/http"
+    scp -qr mdw:pip-cache-dir/http "pip-cache-dir"

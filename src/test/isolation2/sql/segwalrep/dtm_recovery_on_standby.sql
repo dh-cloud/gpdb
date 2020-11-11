@@ -98,4 +98,4 @@ select reinitialize_standby();
 -- end_ignore
 
 -- Sync state between master and standby must be restored at the end.
-select application_name, state from pg_stat_replication;
+select wait_until_standby_in_state('streaming');

@@ -52,6 +52,31 @@ function make_cluster() {
   export STATEMENT_MEM=250MB
   pushd gpdb_src/gpAux/gpdemo
   su gpadmin -c "source /usr/local/greenplum-db-devel/greenplum_path.sh; make create-demo-cluster"
+
+  if [[ "$MAKE_TEST_COMMAND" =~ gp_interconnect_type=proxy ]]; then
+    # generate the addresses for proxy mode
+    su gpadmin -c bash -- -e <<EOF
+      source /usr/local/greenplum-db-devel/greenplum_path.sh
+      source $PWD/gpdemo-env.sh
+
+      delta=-3000
+
+      psql -tqA -d postgres -P pager=off -F ' ' \
+          -c "select dbid, content, port+\$delta as port, address from gp_segment_configuration order by 1" \
+      | while read -r dbid content port addr; do
+          ip=127.0.0.1
+          echo "\$dbid:\$content:\$ip:\$port"
+        done \
+      | paste -sd, - \
+      | xargs -rI'{}' gpconfig --skipvalidation -c gp_interconnect_proxy_addresses -v "'{}'"
+
+      # also have to enlarge gp_interconnect_tcp_listener_backlog
+      gpconfig -c gp_interconnect_tcp_listener_backlog -v 1024
+
+      gpstop -raqi
+EOF
+  fi
+
   popd
 }
 
@@ -91,7 +116,7 @@ function install_python_hacks() {
 function _install_python_requirements() {
     # virtualenv 16.0 and greater does not support python2.6, which is
     # used on centos6
-    pip install --user virtualenv~=15.0
+    pip --retries 10 install --user virtualenv~=15.0
     export PATH=$PATH:~/.local/bin
 
     # create virtualenv before sourcing greenplum_path since greenplum_path
@@ -123,24 +148,33 @@ function _install_python_requirements() {
 
 function install_python_requirements_on_single_host() {
     local requirements_txt="$1"
+
+    # Set PIP Download cache directory
+    export PIP_CACHE_DIR=${PWD}/pip-cache-dir
+
     _install_python_requirements
 
     # Install requirements into the vendored Python stack
     mkdir -p /tmp/py-requirements
     source /tmp/venv/bin/activate
-        pip install --prefix /tmp/py-requirements -r ${requirements_txt}
+        pip --retries 10 install --ignore-installed --prefix /tmp/py-requirements -r ${requirements_txt}
         cp -r /tmp/py-requirements/* /usr/local/greenplum-db-devel/ext/python/
     deactivate
 }
 
 function install_python_requirements_on_multi_host() {
     local requirements_txt="$1"
+
+    # Set PIP Download cache directory
+    export PIP_CACHE_DIR=/home/gpadmin/pip-cache-dir
+
     _install_python_requirements
 
     # Install requirements into the vendored Python stack on all hosts.
     mkdir -p /tmp/py-requirements
+
     source /tmp/venv/bin/activate
-        pip install --prefix /tmp/py-requirements -r ${requirements_txt}
+        pip --retries 10 install --ignore-installed --prefix /tmp/py-requirements -r ${requirements_txt}
         while read -r host; do
             rsync -rz /tmp/py-requirements/ "$host":/usr/local/greenplum-db-devel/ext/python/
         done < /tmp/hostfile_all

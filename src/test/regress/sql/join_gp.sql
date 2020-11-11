@@ -498,6 +498,27 @@ explain select * from t1_lateral_limit as t1 cross join lateral
 select * from t1_lateral_limit as t1 cross join lateral
 (select ((c).x+t2.b) as n  from t2_lateral_limit as t2 order by n limit 1)s;
 
+-- Continue with the above cases, if the lateral subquery contains union all
+-- and in some of its appendquerys contain limit, it may also lead to bad plan.
+-- The best solution may be to walk the query to and do some static analysis
+-- to find out which rel has to be gathered and materialized. But it is complicated
+-- to do so and this seems less efficient. I believe in future we should do big
+-- refactor to make greenplum support lateral well so now, let's just make sure
+-- we will not panic.
+explain (costs off) select * from t1_lateral_limit as t1 cross join lateral
+((select ((c).x+t2.b) as n  from t2_lateral_limit as t2 order by n limit 1) union all select 1)s;
+
+select * from t1_lateral_limit as t1 cross join lateral
+((select ((c).x+t2.b) as n  from t2_lateral_limit as t2 order by n limit 1) union all select 1)s;
+
+-- test lateral subquery contains group by (group-by is another place that
+-- may add motions in the subquery's plan).
+explain select * from t1_lateral_limit t1 cross join lateral
+(select (c).x+t2.a, sum(t2.a+t2.b) from t2_lateral_limit t2 group by (c).x+t2.a)x;
+
+select * from t1_lateral_limit t1 cross join lateral
+(select (c).x+t2.a, sum(t2.a+t2.b) from t2_lateral_limit t2 group by (c).x+t2.a)x;
+
 -- The following case is from Github Issue
 -- https://github.com/greenplum-db/gpdb/issues/8860
 -- It is the same issue as the above test suite.
@@ -544,3 +565,70 @@ on t1.b = t2.b and t1.a > any (select sum(b) from t3_test_pretch_join_qual t3 wh
 
 reset Test_print_prefetch_joinqual;
 reset optimizer;
+
+-- Github Issue: https://github.com/greenplum-db/gpdb/issues/9733
+-- Previously in the function bring_to_outer_query and
+-- bring_to_singleQE it depends on the path->param_info field
+-- to determine if the path contains outerParams. This is not
+-- enought. The following case would SegFault before because
+-- the indexpath's orderby clause contains outerParams.
+create table gist_tbl_github9733 (b box, p point, c circle);
+insert into gist_tbl_github9733
+select box(point(0.05*i, 0.05*i), point(0.05*i, 0.05*i)),
+       point(0.05*i, 0.05*i),
+       circle(point(0.05*i, 0.05*i), 1.0)
+from generate_series(0,10000) as i;
+vacuum analyze gist_tbl_github9733;
+create index gist_tbl_point_index_github9733 on gist_tbl_github9733 using gist (p);
+set enable_seqscan=off;
+set enable_bitmapscan=off;
+explain (costs off)
+select p from
+  (values (box(point(0,0), point(0.5,0.5))),
+          (box(point(0.5,0.5), point(0.75,0.75))),
+          (box(point(0.8,0.8), point(1.0,1.0)))) as v(bb)
+cross join lateral
+  (select p from gist_tbl_github9733 where p <@ bb order by p <-> bb[0] limit 2) ss;
+
+reset enable_seqscan;
+explain (costs off)
+select p from
+  (values (box(point(0,0), point(0.5,0.5))),
+          (box(point(0.5,0.5), point(0.75,0.75))),
+          (box(point(0.8,0.8), point(1.0,1.0)))) as v(bb)
+cross join lateral
+  (select p from gist_tbl_github9733 where p <@ bb order by p <-> bb[0] limit 2) ss;
+
+select p from
+  (values (box(point(0,0), point(0.5,0.5))),
+          (box(point(0.5,0.5), point(0.75,0.75))),
+          (box(point(0.8,0.8), point(1.0,1.0)))) as v(bb)
+cross join lateral
+  (select p from gist_tbl_github9733 where p <@ bb order by p <-> bb[0] limit 2) ss;
+
+reset enable_bitmapscan;
+
+-- Test targetlist contains placeholder var
+-- When creating a redistributed motion with hash keys,
+-- Greenplum planner will invoke `cdbpullup_findEclassInTargetList`.
+-- The following test case contains non-strict function `coalesce`
+-- in the subquery at nullable-side of outerjoin and thus will
+-- have PlaceHolderVar in targetlist. The case is to test if
+-- function `cdbpullup_findEclassInTargetList` handles PlaceHolderVar
+-- correct.
+-- See github issue: https://github.com/greenplum-db/gpdb/issues/10315
+create table t_issue_10315 ( id1 int, id2 int );
+
+insert into t_issue_10315 select i,i from generate_series(1, 2)i;
+insert into t_issue_10315 select i,null from generate_series(1, 2)i;
+insert into t_issue_10315 select null,i from generate_series(1, 2)i;
+
+select *  from
+( select coalesce( bq.id1 ) id1, coalesce ( bq.id2 ) id2
+        from ( select r.id1, r.id2 from t_issue_10315 r group by r.id1, r.id2 ) bq  ) t
+full join ( select r.id1, r.id2 from t_issue_10315 r group by r.id1, r.id2 ) bq_all
+on t.id1 = bq_all.id1  and t.id2 = bq_all.id2
+full join ( select r.id1, r.id2 from t_issue_10315 r group by r.id1, r.id2 ) tq_all
+on (coalesce(t.id1) = tq_all.id1  and t.id2 = tq_all.id2) ;
+
+drop table t_issue_10315;

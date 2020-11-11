@@ -442,6 +442,7 @@ create readable external table bar_p(i int, j int) location ('gpfdist://host.inv
 alter table foo_p exchange partition for(rank(3)) with table bar_p;
 alter table foo_p exchange partition for(rank(3)) with table bar_p without validation;
 truncate foo_p;
+analyze foo_p;
 drop table foo_p;
 drop table bar_p;
 
@@ -2140,6 +2141,26 @@ drop index ti_pkey;
 drop index ti_j_idx;
 select * from pg_indexes where schemaname = 'public' and tablename like 'ti%';
 drop table ti;
+
+-- Partitioned table with btree index and hash aggregate should use a correct
+-- memory context for its tuples` descriptor
+drop table if exists dis_tupdesc;
+create table dis_tupdesc (a int, b int, c int)
+distributed by (a)
+partition by list (b)
+(
+    partition p1 values (1),
+    partition p2 values (2),
+    default partition junk_data
+);
+create index dis_tupdesc_idx on dis_tupdesc using btree (c);
+insert into dis_tupdesc select i, i % 3, i % 4 from generate_series (1, 240) as i;
+analyze dis_tupdesc;
+set gp_segments_for_planner = 2;
+set optimizer_segments = 2;
+select distinct b from dis_tupdesc where c >= 2;
+reset gp_segments_for_planner;
+reset optimizer_segments;
 
 -- MPP-6611, make sure rename works with default partitions
 create table it (i int, j int) partition by range(i) 

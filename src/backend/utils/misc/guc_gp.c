@@ -130,7 +130,6 @@ bool        test_AppendOnlyHash_eviction_vs_just_marking_not_inuse = false;
 bool		Debug_appendonly_print_datumstream = false;
 bool		Debug_appendonly_print_visimap = false;
 bool		Debug_appendonly_print_compaction = false;
-bool		Debug_resource_group = false;
 bool		Debug_bitmap_print_insert = false;
 bool		Test_print_direct_dispatch_info = false;
 bool        Test_print_prefetch_joinqual = false;
@@ -198,9 +197,6 @@ int			Debug_dtm_action_protocol = DEBUG_DTM_ACTION_PROTOCOL_DEFAULT;
 
 int			Debug_dtm_action_segment = DEBUG_DTM_ACTION_SEGMENT_DEFAULT;
 int			Debug_dtm_action_nestinglevel = DEBUG_DTM_ACTION_NESTINGLEVEL_DEFAULT;
-
-/* Enable check for compatibility of encoding and locale in createdb */
-bool		gp_encoding_check_locale_compatibility;
 
 int			gp_connection_send_timeout;
 
@@ -354,6 +350,7 @@ bool		optimizer_enable_master_only_queries;
 bool		optimizer_enable_hashjoin;
 bool		optimizer_enable_dynamictablescan;
 bool		optimizer_enable_indexscan;
+bool		optimizer_enable_indexonlyscan;
 bool		optimizer_enable_tablescan;
 bool		optimizer_enable_hashagg;
 bool		optimizer_enable_groupagg;
@@ -440,6 +437,8 @@ bool		gp_enable_segment_copy_checking = true;
  * pairs.  E.g. "appendonly=true,orientation=column"
  */
 char	   *gp_default_storage_options = NULL;
+
+bool		gp_add_column_inherits_table_setting = false;
 
 int			writable_external_table_bufsize = 64;
 
@@ -537,6 +536,9 @@ static const struct config_enum_entry gp_interconnect_fc_methods[] = {
 static const struct config_enum_entry gp_interconnect_types[] = {
 	{"udpifc", INTERCONNECT_TYPE_UDPIFC},
 	{"tcp", INTERCONNECT_TYPE_TCP},
+#ifdef ENABLE_IC_PROXY
+	{"proxy", INTERCONNECT_TYPE_PROXY},
+#endif  /* ENABLE_IC_PROXY */
 	{NULL, 0}
 };
 
@@ -2409,6 +2411,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 	},
 
 	{
+		{"optimizer_enable_indexonlyscan", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Enables the optimizer's use of plans with index only scan."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&optimizer_enable_indexonlyscan,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"optimizer_enable_tablescan", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Enables the optimizer's use of plans with table scan."),
 			NULL,
@@ -3043,6 +3056,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&optimizer_enable_range_predicate_dpe,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_add_column_inherits_table_setting", PGC_USERSET, CUSTOM_OPTIONS,
+			gettext_noop("Alter table add column inherits storage setting from the table."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&gp_add_column_inherits_table_setting,
 		false,
 		NULL, NULL, NULL
 	},
@@ -3737,6 +3761,16 @@ struct config_int ConfigureNamesInt_gp[] =
 	},
 
 	{
+		{"gp_fts_replication_attempt_count", PGC_SIGHUP, GP_ARRAY_TUNING,
+			gettext_noop("Primary-mirror replication connection max continuously attempt count for FTS"),
+			gettext_noop("Used by the fts-probe process.")
+		},
+		&gp_fts_replication_attempt_count,
+		10, 0, 100,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"gp_gang_creation_retry_count", PGC_USERSET, GP_ARRAY_TUNING,
 			gettext_noop("After a gang-creation fails, retry the number of times if failure is retryable."),
 			gettext_noop("A value of zero disables retries."),
@@ -3956,7 +3990,16 @@ struct config_int ConfigureNamesInt_gp[] =
 		1000, 1000, INT_MAX,
 		NULL, NULL, NULL
 	},
-
+	{
+		{"gp_resource_group_queuing_timeout", PGC_USERSET, RESOURCES_MGM,
+			gettext_noop("A transaction gives up on queuing on a resource group after this timeout (in ms)."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&gp_resource_group_queuing_timeout,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
 	{
 		{"gp_perfmon_segment_interval", PGC_POSTMASTER, STATS,
 			gettext_noop("Interval (in ms) between sending segment statistics to perfmon."),
@@ -4567,6 +4610,19 @@ struct config_string ConfigureNamesString_gp[] =
 		NULL, NULL, NULL
 	},
 
+#ifdef ENABLE_IC_PROXY
+	{
+		{"gp_interconnect_proxy_addresses", PGC_SIGHUP, GP_ARRAY_CONFIGURATION,
+			gettext_noop("Sets the ic-proxy addresses as \"content:ip:port ...\", must be ordered by content, the port is ignored at the moment."),
+			gettext_noop("e.g. \"-1:10.0.0.1:2000 0:10.0.0.2:2000 1:10.0.0.2:2001\""),
+			GUC_NO_SHOW_ALL | GUC_GPDB_NO_SYNC
+		},
+		&gp_interconnect_proxy_addresses,
+		"",
+		NULL, NULL, NULL
+	},
+#endif  /* ENABLE_IC_PROXY */
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL
@@ -4732,7 +4788,11 @@ struct config_enum ConfigureNamesEnum_gp[] =
 	{
 		{"gp_interconnect_type", PGC_BACKEND, GP_ARRAY_TUNING,
 			gettext_noop("Sets the protocol used for inter-node communication."),
-			gettext_noop("Valid values are \"tcp\" and \"udpifc\".")
+			gettext_noop("Valid values are \"tcp\", \"udpifc\""
+#ifdef ENABLE_IC_PROXY
+						 " and \"proxy\""
+#endif  /* ENABLE_IC_PROXY */
+						 ".")
 		},
 		&Gp_interconnect_type,
 		INTERCONNECT_TYPE_UDPIFC, gp_interconnect_types,

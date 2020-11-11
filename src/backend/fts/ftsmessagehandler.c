@@ -136,7 +136,8 @@ checkIODataDirectory(void)
 		}
 	} while (0);
 
-	if (fd > 0)
+	pfree(data);
+	if (fd >= 0)
 	{
 		close(fd);
 
@@ -163,7 +164,6 @@ checkIODataDirectory(void)
 		ereport(ERROR,
 				(errmsg("disk IO check during FTS probe failed")));
 
-	pfree(data);
 	return failure;
 }
 
@@ -416,7 +416,7 @@ HandleFtsMessage(const char* query_string)
 	}
 
 #ifdef USE_ASSERT_CHECKING
-	error_level = PANIC;
+	error_level = FATAL;
 #else
 	error_level = WARNING;
 #endif

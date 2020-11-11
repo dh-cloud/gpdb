@@ -487,8 +487,6 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid, bool lockHeld)
 
 		Assert(pgxact->nxids == 0);
 		Assert(pgxact->overflowed == false);
-
-		proc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
 	}
 
 	/* Clear distributed transaction status for one-phase commit transaction */
@@ -520,8 +518,6 @@ ProcArrayClearTransaction(PGPROC *proc)
 	proc->lxid = InvalidLocalTransactionId;
 	pgxact->xmin = InvalidTransactionId;
 	proc->recoveryConflictPending = false;
-
-	proc->localDistribXactData.state = LOCALDISTRIBXACT_STATE_NONE;
 
 	/* redundant, but just in case */
 	pgxact->vacuumFlags &= ~PROC_VACUUM_STATE_MASK;
@@ -1531,7 +1527,7 @@ GetDistributedSnapshotMaxCount(DtxContext distributedTransactionContext)
 		return 0;
 
 	case DTX_CONTEXT_QD_DISTRIBUTED_CAPABLE:
-		return max_prepared_xacts;
+		return GetMaxSnapshotXidCount();
 
 	case DTX_CONTEXT_QE_TWO_PHASE_EXPLICIT_WRITER:
 	case DTX_CONTEXT_QE_TWO_PHASE_IMPLICIT_WRITER:
@@ -1732,8 +1728,8 @@ getDtxCheckPointInfo(char **result, int *result_size)
 	gxact_log_array = &gxact_checkpoint->committedGxactArray[0];
 
 	actual = 0;
-	for (i = 0; i < *shmNumCommittedGxacts; i++)
-		gxact_log_array[actual++] = shmCommittedGxactArray[i++];
+	for (; actual < *shmNumCommittedGxacts; actual++)
+		gxact_log_array[actual] = shmCommittedGxactArray[actual];
 
 	SIMPLE_FAULT_INJECTOR("checkpoint_dtx_info");
 
@@ -2231,6 +2227,8 @@ GetSnapshotData(Snapshot snapshot, DtxContext distributedTransactionContext)
 
 				if (total_sleep_time_us >= segmate_timeout_us)
 				{
+					LWLockRelease(SharedLocalSnapshotSlot->slotLock);
+					LWLockAcquire(SharedSnapshotLock, LW_SHARED); /* For SharedSnapshotDump() */
 					ereport(ERROR,
 							(errcode(ERRCODE_GP_INTERCONNECTION_ERROR),
 							 errmsg("GetSnapshotData timed out waiting for Writer to set the shared snapshot."),
@@ -4874,5 +4872,65 @@ KnownAssignedXidsReset(void)
 	pArray->tailKnownAssignedXids = 0;
 	pArray->headKnownAssignedXids = 0;
 
+	LWLockRelease(ProcArrayLock);
+}
+
+int
+GetSessionIdByPid(int pid)
+{
+	int sessionId = -1;
+	ProcArrayStruct *arrayP = procArray;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	for (int i = 0; i < arrayP->numProcs; i++)
+	{
+		volatile PGPROC *proc = &allProcs[arrayP->pgprocnos[i]];
+		if (proc->pid == pid)
+		{
+			sessionId = proc->mppSessionId;
+			break;
+		}
+	}
+	LWLockRelease(ProcArrayLock);
+	return sessionId;
+}
+
+/*
+ * Set the destination group slot or group id in PGPROC, and send a signal to the proc.
+ * slot is NULL on QE.
+ */
+void
+ResGroupSignalMoveQuery(int sessionId, void *slot, Oid groupId)
+{
+	pid_t pid;
+	BackendId backendId;
+	ProcArrayStruct *arrayP = procArray;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	for (int i = 0; i < arrayP->numProcs; i++)
+	{
+		volatile PGPROC *proc = &allProcs[arrayP->pgprocnos[i]];
+		if (proc->mppSessionId != sessionId)
+			continue;
+
+		pid = proc->pid;
+		backendId = proc->backendId;
+		if (Gp_role == GP_ROLE_DISPATCH)
+		{
+			Assert(proc->movetoResSlot == NULL);
+			Assert(slot != NULL);
+			proc->movetoResSlot = slot;
+			SendProcSignal(pid, PROCSIG_RESOURCE_GROUP_MOVE_QUERY, backendId);
+			break;
+		}
+		else if (Gp_role == GP_ROLE_EXECUTE)
+		{
+			Assert(groupId != InvalidOid);
+			Assert(proc->movetoGroupId == InvalidOid);
+			proc->movetoGroupId = groupId;
+			SendProcSignal(pid, PROCSIG_RESOURCE_GROUP_MOVE_QUERY, backendId);
+			/* don't break, need to signal all the procs of this session */
+		}
+	}
 	LWLockRelease(ProcArrayLock);
 }

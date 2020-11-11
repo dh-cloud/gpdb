@@ -26,6 +26,8 @@
  * ----- Declarations of Greenplum-specific global variables ------
  */
 
+#define WRITER_IS_MISSING_MSG "reader could not find writer proc entry"
+
 #ifdef sparc
 #define TUPLE_CHUNK_ALIGN	4
 #else
@@ -307,6 +309,7 @@ extern int	gp_fts_probe_retries; /* GUC var - specifies probe number of retries 
 extern int	gp_fts_probe_timeout; /* GUC var - specifies probe timeout for FTS */
 extern int	gp_fts_probe_interval; /* GUC var - specifies polling interval for FTS */
 extern int gp_fts_mark_mirror_down_grace_period;
+extern int	gp_fts_replication_attempt_count; /* GUC var - specifies replication max attempt count for FTS */
 
 extern int gp_gang_creation_retry_count; /* How many retries ? */
 extern int gp_gang_creation_retry_timer; /* How long between retries */
@@ -338,9 +341,12 @@ typedef enum GpVars_Interconnect_Type
 {
 	INTERCONNECT_TYPE_TCP = 0,
 	INTERCONNECT_TYPE_UDPIFC,
+	INTERCONNECT_TYPE_PROXY,
 } GpVars_Interconnect_Type;
 
 extern int Gp_interconnect_type;
+
+extern char *gp_interconnect_proxy_addresses;
 
 typedef enum GpVars_Interconnect_Method
 {
@@ -707,6 +713,9 @@ extern bool gp_enable_sort_distinct;
 extern bool gp_enable_mk_sort;
 extern bool gp_enable_motion_mk_sort;
 
+/* Alter table add column inherits storage setting from the table */
+extern bool gp_add_column_inherits_table_setting;
+
 #ifdef USE_ASSERT_CHECKING
 extern bool gp_mk_sort_check;
 #endif
@@ -735,6 +744,9 @@ extern bool gp_dynamic_partition_pruning;
 extern bool gp_cte_sharing;
 /* Enable RECURSIVE clauses in common table expressions */
 extern bool gp_recursive_cte;
+
+/* Enable check for compatibility of encoding and locale in createdb */
+extern bool gp_encoding_check_locale_compatibility;
 
 /* Priority for the segworkers relative to the postmaster's priority */
 extern int gp_segworker_relative_priority;

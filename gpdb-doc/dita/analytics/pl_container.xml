@@ -80,6 +80,7 @@
               resources.</li>
             <li>Supports more containers running concurrently.</li>
             <li>Includes improved log messages to help diagnose problems.</li>
+            <li>Supports the <codeph>DO</codeph> command (anonymous code block). </li>
           </ul></p>
         <p>PL/Container 3 is currently a Beta feature, and provides only an Beta R Docker image for
           executing functions; Python images are not yet available. Save and uninstall any existing
@@ -87,12 +88,10 @@
       </section>
     </body>
   </topic>
-  
   <topic id="topic3" xml:lang="en">
     <title id="pz214493">Install PL/Container </title>
-    
     <body>
-    <section>This topic includes how to: <p/><ul>
+      <section>This topic includes how to: <ul>
           <li><xref href="#install_docker" format="dita" scope="local">Install Docker</xref></li>
           <li><xref href="#topic3/install_pl_utility" format="dita">Install PL/Container</xref></li>
           <li><xref href="#topic3/install_docker_images" format="dita">Install the PL/Container
@@ -169,9 +168,15 @@
             <codeph>$GPHOME/greenplum_path.sh</codeph>:<codeblock>source $GPHOME/greenplum_path.sh</codeblock></li>
           <li>Make sure Greenplum Database is up and running:<codeblock>gpstate -s</codeblock>If
             it's not, start it:<codeblock>gpstart -a</codeblock></li>
-          <li>For PL/Container version 3 Beta only, enable the <codeph>plc_coordinator</codeph>
-            shared library using the
-            command:<codeblock>gpconfig -c shared_preload_libraries -v 'plc_coordinator'</codeblock></li>
+          <li>For PL/Container version 3 Beta only, add the <codeph>plc_coordinator</codeph>
+            shared library to the Greenplum Database <codeph>shared_preload_libraries</codeph>
+            server configuration parameter. Be sure to retain any previous setting of the
+            parameter. For example:<codeblock>gpconfig -s shared_preload_libraries
+Values on all segments are consistent
+GUC          : shared_preload_libraries
+Master  value: diskquota
+Segment value: diskquota
+gpconfig -c shared_preload_libraries -v 'diskquota,plc_coordinator'</codeblock></li>
           <li>Restart Greenplum Database:<codeblock>gpstop -ra</codeblock></li>
           <li>Login into one of the available databases, for example:
             <codeblock>psql postgres</codeblock></li>
@@ -184,7 +189,7 @@
     
     <section id="install_docker_images">
         <title>Install PL/Container Docker Images</title>
-        <p>Install the Docker images that PL/Container will use to create language specific
+        <p>Install the Docker images that PL/Container will use to create language-specific
           containers to run the UDFs.</p>
         <!--oss only content-->
         <p otherprops="oss-only">The PL/Container open source module contains dockerfiles to build
@@ -206,9 +211,9 @@
             with the associated <filepath>plcontainer-r-image-3.0.0-beta-gp6.tar.gz</filepath>
             image.</li>
           <li>
-            <p>Use the <codeph>plcontainer </codeph> utility command <codeph>image-add</codeph> to
-              install the images on all Greenplum Database hosts where  <codeph>-f
-              </codeph>indicates the location of the downloaded files: </p>
+            <p>Use the <codeph>plcontainer image-add</codeph> command to install an image on
+              all Greenplum Database hosts. Provide the <codeph>-f</codeph> option to specify
+              the file system location of a downloaded image file. For example: </p>
             <codeblock># Install a Python 2 based Docker image
 plcontainer image-add -f /home/gpadmin/plcontainer-python-image-2.1.1-gp6.tar.gz
             
@@ -225,6 +230,11 @@ plcontainer image-add -f /home/gpadmin/plcontainer-r-image-3.0.0-beta-gp6.tar.gz
 20200127:21:54:43:004607 plcontainer:mdw:gpadmin-[INFO]:-Distributing image file /home/gpadmin/plcontainer-python-images-1.5.0.tar to all hosts...
 20200127:21:54:55:004607 plcontainer:mdw:gpadmin-[INFO]:-Loading image on all hosts...
 20200127:21:55:37:004607 plcontainer:mdw:gpadmin-[INFO]:-Removing temporary image files on all hosts...</codeblock>
+            <p>By default, the <codeph>image-add</codeph> command copies the image to each Greenplum
+              Database segment and standby master host, and installs the image. When you specify
+              the <codeph>[-ulc | --use_local_copy]</codeph> option, <codeph>plcontainer</codeph>
+              installs the image only on the host on which you execute the command. Use this option
+              when the PL/Container image already resides on disk on a host.</p>
             <p>For more information on <codeph>image-add</codeph> options, visit the <xref
                 href="../utility_guide/ref/plcontainer.xml#topic_rw3_52s_dw">plcontainer </xref> reference page. </p>
           </li>
@@ -426,11 +436,22 @@ postgres=# select dummyR();
       <body>
         <p>This step is required only if you have installed PL/Container 3 Beta. Before you remove
           the extension from your system with <codeph>gppkg</codeph>, remove the shared library
-          configuration for the <codeph>plc_coordinator</codeph> process. For example, the following
-          command comments-out the <codeph>shared_preload_libraries</codeph> setting in
-            <filepath>postgresql.conf
-          </filepath>:<codeblock>$ gpconfig -r shared_preload_libraries
-$ gpstop -ra</codeblock></p>
+          configuration for the <codeph>plc_coordinator</codeph> process:</p>
+        <ol>
+          <li>Examine the <codeph>shared_preload_libraries</codeph> server configuration
+            parameter setting.<codeblock>$ gpconfig -s shared_preload_libraries</codeblock><ul>
+              <li>If <codeph>plc_coordinator</codeph> is the only library listed, remove
+                the configuration parameter setting: <codeblock>$ gpconfig -r shared_preload_libraries</codeblock>
+                <p>Removing a server configuration parameter comments out the setting in the
+                <filepath>postgresql.conf</filepath> file.</p></li>
+              <li>If there are multiple libraries listed, remove
+                <codeph>plc_coordinator</codeph> from the list and re-set the configuration
+                parameter. For example, if <codeph>shared_preload_libraries</codeph> is set
+                to <codeph>'diskquota,plc_coordinator'</codeph>:
+                <codeblock>$ gpconfig -c shared_preload_libraries -v 'diskquota'</codeblock></li>
+            </ul></li>
+          <li>Restart the Greenplum Database cluster:<codeblock>$ gpstop -ra</codeblock></li>
+        </ol>
       </body>
     </topic>
     <topic xml:lang="en" id="topic_dty_fcj_kw" otherprops="pivotal">
@@ -516,10 +537,6 @@ $ gpstop -ra</codeblock></p>
       <p>Control and configure Docker with systemd <xref
           href="https://docs.docker.com/engine/admin/systemd/" format="html" scope="external"
           >https://docs.docker.com/engine/admin/systemd/</xref></p>
-      <p>Changes to Python <xref href="https://docs.python.org/3/whatsnew/index.html" format="html"
-          scope="external">What’s New in Python</xref></p>
-      <p>Porting from Python 2 to 3 <xref href="https://docs.python.org/3/howto/pyporting.html"
-          format="html" scope="external">Porting Python 2 Code to Python 3</xref></p>
       </body>
   </topic>
 

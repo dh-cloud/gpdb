@@ -31,6 +31,7 @@
  */
 #include "postgres.h"
 
+#include "access/aomd.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/sysattr.h"
@@ -1497,12 +1498,7 @@ heap_create_with_catalog(const char *relname,
 	 * Allocate new OIDs here.
 	 */
 	if (!OidIsValid(relid) && Gp_role != GP_ROLE_EXECUTE)
-	{
-		if (IsBootstrapProcessingMode())
-			relid = GetNewOid(pg_class_desc);
-		else
-			relid = GetNewOid(pg_class_desc);
-	}
+		relid = GetNewOid(pg_class_desc);
 
 	/*
 	 * Determine the relation's initial permissions.
@@ -3421,6 +3417,11 @@ heap_truncate(List *relids)
 	}
 }
 
+/*
+ *	 heap_truncate_one_relid
+ *
+ *	 This routine deletes all data within the specified relation.
+ */
 static void
 heap_truncate_one_relid(Oid relid)
 {
@@ -3469,7 +3470,13 @@ heap_truncate_one_rel(Relation rel)
 	Oid			toastrelid;
 
 	/* Truncate the actual file (and discard buffers) */
-	RelationTruncate(rel, 0);
+	if (RelationIsAppendOptimized(rel))
+	{
+		ao_truncate_one_rel(rel);
+		ao_aux_tables_truncate(rel);
+	}
+	else
+		RelationTruncate(rel, 0);
 
 	/* If the relation has indexes, truncate the indexes too */
 	RelationTruncateIndexes(rel);
@@ -3485,8 +3492,6 @@ heap_truncate_one_rel(Relation rel)
 		/* keep the lock... */
 		heap_close(toastrel, NoLock);
 	}
-
-	ao_aux_tables_truncate(rel);
 }
 
 /*
